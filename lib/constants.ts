@@ -84,3 +84,22 @@ export const DISPATCH_MODAL_LABELS: Record<string, string> = {
 export const LALAMOVE_SERVICE_TYPE = "MOTORCYCLE";
 export const LALAMOVE_API_BASE_URL = "https://rest.lalamove.com";
 export const LALAMOVE_SANDBOX_URL = "https://sandbox-rest.lalamove.com";
+
+// Motor de Decisão de Frete — mapeamento de nome interno → código API Lalamove
+export const LALAMOVE_VEHICLE_MAP: Record<string, string> = {
+  LALAPRO:    "MOTORCYCLE",
+  UTILITARIO: "VAN",
+  VAN:        "VAN_L",
+  CARRETO:    "MOVING_TRUCK",
+  CAMINHAO:   "TRUCK",
+}
+
+// Margem por tipo de veículo interno: precoBase = MAX(zona, custo × margem)
+export const INTERNAL_VEHICLE_MARGINS: Record<string, number> = {
+  MOTO:     1.8,
+  FIORINO:  1.4,
+  CAMINHAO: 1.3,
+}
+
+// Margem sobre custo Lalamove quando selectedMode = LALAMOVE
+export const LALAMOVE_PRICE_MARGIN = 1.15

@@ -39,6 +39,89 @@ export {
 };
 
 // ──────────────────────────────────────────────
+// MOTOR DE DECISÃO DE FRETE
+// ──────────────────────────────────────────────
+
+// Tipos de veículo da frota própria
+export const InternalVehicleType = {
+  MOTO:     "MOTO",
+  FIORINO:  "FIORINO",
+  CAMINHAO: "CAMINHAO",
+} as const
+export type InternalVehicleType = typeof InternalVehicleType[keyof typeof InternalVehicleType]
+
+// Tipos de serviço Lalamove Brasil
+// ATENÇÃO: confirmar os códigos exatos na API Lalamove antes do go-live
+export const LalamoveServiceType = {
+  LALAPRO:    "MOTORCYCLE",
+  UTILITARIO: "VAN",
+  VAN:        "VAN_L",
+  CARRETO:    "MOVING_TRUCK",
+  CAMINHAO:   "TRUCK",
+} as const
+export type LalamoveServiceType = typeof LalamoveServiceType[keyof typeof LalamoveServiceType]
+
+// Configurações de classificação de veículos (carregadas do SystemConfig)
+export interface VehicleConfig {
+  INTERNAL_MOTO_MAX_KG:        number
+  INTERNAL_FIORINO_MAX_KG:     number
+  INTERNAL_FIORINO_MAX_LATAS:  number
+  INTERNAL_CAMINHAO_MAX_KG:    number
+  INTERNAL_CAMINHAO_MAX_LATAS: number
+  LALA_LALAPRO_MAX_KG:         number
+  LALA_UTILITARIO_MAX_KG:      number
+  LALA_VAN_MAX_KG:             number
+  LALA_CARRETO_MAX_KG:         number
+  LALA_CAMINHAO_MAX_KG:        number
+}
+
+// Configurações de custo de rota interna
+export interface CostConfig {
+  COST_PER_KM:      number
+  COST_PER_HOUR:    number
+  FIXED_ROUTE_COST: number
+}
+
+export interface FreightDecisionInput {
+  originLat:           number
+  originLng:           number
+  destLat:             number
+  destLng:             number
+  isUrgent:            boolean
+  deliveryDate:        Date
+  deliveryWindowStart: Date
+  deliveryWindowEnd:   Date
+  items: {
+    productCode: string
+    quantity:    number
+    weightKg:    number
+    latas?:      number
+    volumeM3?:   number
+  }[]
+  sellerId: string
+  storeId:  string
+}
+
+export interface FreightDecisionResult {
+  selectedMode:             "INTERNAL" | "LALAMOVE"
+  selectedVehicle:          InternalVehicleType | LalamoveServiceType
+  driverId?:                string
+  requiresManualAssignment: boolean
+  lalamoveQuote?: {
+    quotationId:    string
+    estimatedPrice: number
+    serviceType:    string
+  }
+  distanceKm:      number
+  durationMinutes: number
+  isApproximate:   boolean
+  internalCost:    number
+  lalamoveCost:    number | null
+  suggestedPrice:  number
+  decisionReason:  string
+}
+
+// ──────────────────────────────────────────────
 // TIPOS EXPANDIDOS (com relações)
 // ──────────────────────────────────────────────
 
