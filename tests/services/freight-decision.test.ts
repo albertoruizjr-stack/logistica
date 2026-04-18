@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
   classifyVehicle,
+  calculateInternalCost,
 } from "@/services/freight-decision.service";
 import { InternalVehicleType, LalamoveServiceType } from "@/types";
 import type { VehicleConfig } from "@/types";
+import type { CostConfig } from "@/types";
 
 const defaultVehicleConfig: VehicleConfig = {
   INTERNAL_MOTO_MAX_KG:        20,
@@ -67,5 +69,29 @@ describe("classifyVehicle", () => {
     // 400 kg sem latas → não bloqueia por latas
     expect(r.internalVehicle).toBe(InternalVehicleType.FIORINO);
     expect(r.totalLatas).toBe(0);
+  });
+});
+
+const defaultCostConfig: CostConfig = {
+  COST_PER_KM:      1.50,
+  COST_PER_HOUR:    30.00,
+  FIXED_ROUTE_COST:  8.00,
+};
+
+describe("calculateInternalCost", () => {
+  it("10 km, 20 min → 8 + 15 + 10 = 33", () => {
+    const cost = calculateInternalCost({ distanceKm: 10, durationMin: 20 }, defaultCostConfig);
+    expect(cost).toBeCloseTo(33, 2); // 8 + (10×1.5) + (20/60×30)
+  });
+
+  it("0 km, 0 min → apenas custo fixo", () => {
+    const cost = calculateInternalCost({ distanceKm: 0, durationMin: 0 }, defaultCostConfig);
+    expect(cost).toBeCloseTo(8, 2);
+  });
+
+  it("respeita configs customizadas", () => {
+    const cfg: CostConfig = { COST_PER_KM: 2, COST_PER_HOUR: 60, FIXED_ROUTE_COST: 10 };
+    const cost = calculateInternalCost({ distanceKm: 5, durationMin: 30 }, cfg);
+    expect(cost).toBeCloseTo(10 + 10 + 30, 2); // 10 + (5×2) + (30/60×60)
   });
 });

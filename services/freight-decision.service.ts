@@ -6,6 +6,7 @@ import { InternalVehicleType, LalamoveServiceType } from "@/types";
 import type {
   FreightDecisionInput,
   VehicleConfig,
+  CostConfig,
 } from "@/types";
 
 // ──────────────────────────────────────────────
@@ -51,4 +52,20 @@ export function classifyVehicle(
   else                                                      lalamoveVehicle = "EXCEPTION";
 
   return { internalVehicle, lalamoveVehicle, totalWeightKg, totalLatas };
+}
+
+// ──────────────────────────────────────────────
+// PASSO 3 — CUSTO DE ROTA INTERNA
+// Custo flat — não varia por tipo de veículo.
+// ──────────────────────────────────────────────
+
+export function calculateInternalCost(
+  route: { distanceKm: number; durationMin: number },
+  config: CostConfig
+): number {
+  return (
+    config.FIXED_ROUTE_COST +
+    route.distanceKm * config.COST_PER_KM +
+    (route.durationMin / 60) * config.COST_PER_HOUR
+  );
 }
