@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   classifyVehicle,
   calculateInternalCost,
+  scoreDriverForDelivery,
 } from "@/services/freight-decision.service";
 import { InternalVehicleType, LalamoveServiceType } from "@/types";
 import type { VehicleConfig } from "@/types";
@@ -93,5 +94,55 @@ describe("calculateInternalCost", () => {
     const cfg: CostConfig = { COST_PER_KM: 2, COST_PER_HOUR: 60, FIXED_ROUTE_COST: 10 };
     const cost = calculateInternalCost({ distanceKm: 5, durationMin: 30 }, cfg);
     expect(cost).toBeCloseTo(10 + 10 + 30, 2); // 10 + (5×2) + (30/60×60)
+  });
+});
+
+describe("scoreDriverForDelivery", () => {
+  const origin = { lat: -23.62, lng: -46.70 };
+  const dest   = { lat: -23.60, lng: -46.73 };
+
+  it("motorista sem localização → score 0", () => {
+    const score = scoreDriverForDelivery(
+      { lastLat: null, lastLng: null, activeDispatches: 0 },
+      origin.lat, origin.lng, dest.lat, dest.lng
+    );
+    expect(score).toBe(0);
+  });
+
+  it("motorista na origem, 0 dispatches → score alto (≥ 60)", () => {
+    const score = scoreDriverForDelivery(
+      { lastLat: origin.lat, lastLng: origin.lng, activeDispatches: 0 },
+      origin.lat, origin.lng, dest.lat, dest.lng
+    );
+    expect(score).toBeGreaterThanOrEqual(60);
+  });
+
+  it("motorista longe (30 km), 2 dispatches → score baixo (< 30)", () => {
+    const score = scoreDriverForDelivery(
+      { lastLat: -23.00, lastLng: -46.00, activeDispatches: 2 },
+      origin.lat, origin.lng, dest.lat, dest.lng
+    );
+    expect(score).toBeLessThan(30);
+  });
+
+  it("2 dispatches ativos → perde os 30 pts de disponibilidade", () => {
+    const score0 = scoreDriverForDelivery(
+      { lastLat: origin.lat, lastLng: origin.lng, activeDispatches: 0 },
+      origin.lat, origin.lng, dest.lat, dest.lng
+    );
+    const score2 = scoreDriverForDelivery(
+      { lastLat: origin.lat, lastLng: origin.lng, activeDispatches: 2 },
+      origin.lat, origin.lng, dest.lat, dest.lng
+    );
+    expect(score0 - score2).toBeCloseTo(30, 0);
+  });
+
+  it("score sempre entre 0 e 100", () => {
+    const score = scoreDriverForDelivery(
+      { lastLat: origin.lat, lastLng: origin.lng, activeDispatches: 0 },
+      origin.lat, origin.lng, dest.lat, dest.lng
+    );
+    expect(score).toBeGreaterThanOrEqual(0);
+    expect(score).toBeLessThanOrEqual(100);
   });
 });

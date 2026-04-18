@@ -8,6 +8,7 @@ import type {
   VehicleConfig,
   CostConfig,
 } from "@/types";
+import { calculateHaversineDistance } from "@/lib/utils";
 
 // ──────────────────────────────────────────────
 // PASSO 1 — CLASSIFICAÇÃO DA CARGA
@@ -68,4 +69,35 @@ export function calculateInternalCost(
     route.distanceKm * config.COST_PER_KM +
     (route.durationMin / 60) * config.COST_PER_HOUR
   );
+}
+
+// ──────────────────────────────────────────────
+// PASSO 5 — SCORE DE MOTORISTA (0-100)
+// ──────────────────────────────────────────────
+
+export interface DriverCandidate {
+  lastLat:          number | null;
+  lastLng:          number | null;
+  activeDispatches: number;
+}
+
+const MAX_PROXIMITY_KM = 20; // distâncias além disso valem 0 pts de proximidade
+
+export function scoreDriverForDelivery(
+  driver:    DriverCandidate,
+  originLat: number,
+  originLng: number,
+  destLat:   number,
+  destLng:   number
+): number {
+  if (driver.lastLat === null || driver.lastLng === null) return 0;
+
+  const dOrigin = calculateHaversineDistance(driver.lastLat, driver.lastLng, originLat, originLng);
+  const dDest   = calculateHaversineDistance(driver.lastLat, driver.lastLng, destLat, destLng);
+
+  const originScore   = Math.max(0, 40 * (1 - dOrigin / MAX_PROXIMITY_KM));
+  const destScore     = Math.max(0, 30 * (1 - dDest   / MAX_PROXIMITY_KM));
+  const dispatchScore = driver.activeDispatches === 0 ? 30 : driver.activeDispatches === 1 ? 15 : 0;
+
+  return Math.round(originScore + destScore + dispatchScore);
 }
