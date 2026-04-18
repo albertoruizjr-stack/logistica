@@ -1,14 +1,44 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   classifyVehicle,
   calculateInternalCost,
   scoreDriverForDelivery,
   decideBestDeliveryOption,
   calculateCustomerPrice,
+  makeFreightDecision,
 } from "@/services/freight-decision.service";
 import { InternalVehicleType, LalamoveServiceType } from "@/types";
-import type { VehicleConfig } from "@/types";
+import type { VehicleConfig, FreightDecisionInput } from "@/types";
 import type { CostConfig } from "@/types";
+
+vi.mock("@/lib/prisma", () => ({
+  prisma: {
+    systemConfig: {
+      findMany: vi.fn(),
+    },
+    freightZone: {
+      findFirst: vi.fn(),
+    },
+    driver: {
+      findMany: vi.fn(),
+    },
+    freightDecisionLog: {
+      create: vi.fn().mockResolvedValue({}),
+    },
+  },
+}));
+
+vi.mock("@/lib/route-resolver", () => ({
+  resolveRoute: vi.fn(),
+}));
+
+vi.mock("@/services/lalamove.service", () => ({
+  getLalamoveQuote: vi.fn(),
+}));
+
+import { prisma }           from "@/lib/prisma";
+import { resolveRoute }     from "@/lib/route-resolver";
+import { getLalamoveQuote } from "@/services/lalamove.service";
 
 const defaultVehicleConfig: VehicleConfig = {
   INTERNAL_MOTO_MAX_KG:        20,
@@ -310,5 +340,83 @@ describe("calculateCustomerPrice", () => {
       urgencySurcharge: 1.3,
     });
     expect(price).toBeCloseTo(28, 2); // 20 × 1.4
+  });
+});
+
+describe("makeFreightDecision (integração com mocks)", () => {
+  const baseInput: FreightDecisionInput = {
+    originLat: -23.62, originLng: -46.70,
+    destLat:   -23.60, destLng:   -46.73,
+    isUrgent:  false,
+    deliveryDate:        new Date(),
+    deliveryWindowStart: new Date(),
+    deliveryWindowEnd:   new Date(),
+    items: [{ productCode: "T01", quantity: 2, weightKg: 30, latas: 1 }],
+    sellerId: "seller1",
+    storeId:  "store1",
+  };
+
+  beforeEach(() => {
+    vi.mocked(prisma.systemConfig.findMany).mockResolvedValue([
+      { id: "1",  key: "COST_PER_KM",                value: "1.50",  type: "number", label: "x", storeId: null, createdAt: new Date(), updatedAt: new Date() },
+      { id: "2",  key: "COST_PER_HOUR",              value: "30.00", type: "number", label: "x", storeId: null, createdAt: new Date(), updatedAt: new Date() },
+      { id: "3",  key: "FIXED_ROUTE_COST",           value: "8.00",  type: "number", label: "x", storeId: null, createdAt: new Date(), updatedAt: new Date() },
+      { id: "4",  key: "INTERNAL_MOTO_MAX_KG",       value: "20",    type: "number", label: "x", storeId: null, createdAt: new Date(), updatedAt: new Date() },
+      { id: "5",  key: "INTERNAL_FIORINO_MAX_KG",    value: "500",   type: "number", label: "x", storeId: null, createdAt: new Date(), updatedAt: new Date() },
+      { id: "6",  key: "INTERNAL_FIORINO_MAX_LATAS", value: "20",    type: "number", label: "x", storeId: null, createdAt: new Date(), updatedAt: new Date() },
+      { id: "7",  key: "INTERNAL_CAMINHAO_MAX_KG",   value: "1500",  type: "number", label: "x", storeId: null, createdAt: new Date(), updatedAt: new Date() },
+      { id: "8",  key: "INTERNAL_CAMINHAO_MAX_LATAS", value: "67",   type: "number", label: "x", storeId: null, createdAt: new Date(), updatedAt: new Date() },
+      { id: "9",  key: "LALA_LALAPRO_MAX_KG",        value: "20",    type: "number", label: "x", storeId: null, createdAt: new Date(), updatedAt: new Date() },
+      { id: "10", key: "LALA_UTILITARIO_MAX_KG",     value: "500",   type: "number", label: "x", storeId: null, createdAt: new Date(), updatedAt: new Date() },
+      { id: "11", key: "LALA_VAN_MAX_KG",            value: "1000",  type: "number", label: "x", storeId: null, createdAt: new Date(), updatedAt: new Date() },
+      { id: "12", key: "LALA_CARRETO_MAX_KG",        value: "1500",  type: "number", label: "x", storeId: null, createdAt: new Date(), updatedAt: new Date() },
+      { id: "13", key: "LALA_CAMINHAO_MAX_KG",       value: "2500",  type: "number", label: "x", storeId: null, createdAt: new Date(), updatedAt: new Date() },
+      { id: "14", key: "URGENCY_SURCHARGE_MIN",      value: "1.30",  type: "number", label: "x", storeId: null, createdAt: new Date(), updatedAt: new Date() },
+      { id: "15", key: "DRIVER_MAX_LOCATION_AGE_MIN", value: "30",   type: "number", label: "x", storeId: null, createdAt: new Date(), updatedAt: new Date() },
+    ]);
+
+    vi.mocked(resolveRoute).mockResolvedValue({
+      distanceKm: 8, durationMin: 20, isApproximate: false,
+    });
+
+    vi.mocked(prisma.driver.findMany).mockResolvedValue([
+      {
+        id: "d1", name: "João", active: true, available: true,
+        storeId: "store1", vehicleType: "van", licensePlate: "ABC-0670",
+        phone: "11999990001", createdAt: new Date(), updatedAt: new Date(),
+        locations: [{ id: "l1", driverId: "d1", lat: -23.62, lng: -46.70, timestamp: new Date(), createdAt: new Date() }],
+        dispatches: [],
+      },
+    ] as any);
+
+    vi.mocked(prisma.freightZone.findFirst).mockResolvedValue({
+      id: "z1", name: "Zona 1", minKm: 0, maxKm: 12, basePrice: 25,
+      urgentFactor: 1.8, underConsultation: false, active: true,
+      createdAt: new Date(), updatedAt: new Date(),
+    } as any);
+
+    vi.mocked(getLalamoveQuote).mockResolvedValue({
+      quotationId: "q1",
+      priceBreakdown: { total: "40.00", base: "35.00", totalBeforeOptimization: "40.00", currency: "BRL" },
+      scheduleAt: "", serviceType: "VAN", specialRequests: [], expiresAt: "", stops: [],
+    });
+  });
+
+  it("retorna resultado completo com modo, veículo, custos e preço", async () => {
+    const result = await makeFreightDecision(baseInput);
+
+    expect(result.distanceKm).toBe(8);
+    expect(result.internalCost).toBeGreaterThan(0);
+    expect(result.suggestedPrice).toBeGreaterThan(0);
+    expect(["INTERNAL", "LALAMOVE"]).toContain(result.selectedMode);
+    expect(result.decisionReason.length).toBeGreaterThan(0);
+    expect(result.requiresManualAssignment).toBe(false);
+  });
+
+  it("quando Lalamove lança erro, continua com modo interno", async () => {
+    vi.mocked(getLalamoveQuote).mockRejectedValue(new Error("API timeout"));
+    const result = await makeFreightDecision(baseInput);
+    expect(result.lalamoveCost).toBeNull();
+    expect(result.selectedMode).toBe("INTERNAL");
   });
 });

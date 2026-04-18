@@ -9,9 +9,13 @@ import type {
   FreightDecisionInput,
   VehicleConfig,
   CostConfig,
+  LalamoveStop,
+  FreightDecisionResult,
 } from "@/types";
 import { calculateHaversineDistance } from "@/lib/utils";
 import { INTERNAL_VEHICLE_MARGINS, LALAMOVE_PRICE_MARGIN } from "@/lib/constants";
+import { resolveRoute }       from "@/lib/route-resolver";
+import { getLalamoveQuote }   from "@/services/lalamove.service";
 
 // ──────────────────────────────────────────────
 // PASSO 1 — CLASSIFICAÇÃO DA CARGA
@@ -260,4 +264,142 @@ export async function getAvailableDrivers(
     lastLng:          d.locations[0]?.lng ?? null,
     activeDispatches: d.dispatches.length,
   }));
+}
+
+// ──────────────────────────────────────────────
+// ORQUESTRADOR PRINCIPAL
+// ──────────────────────────────────────────────
+
+const DECISION_CONFIG_KEYS = [
+  "COST_PER_KM", "COST_PER_HOUR", "FIXED_ROUTE_COST",
+  "INTERNAL_MOTO_MAX_KG", "INTERNAL_FIORINO_MAX_KG", "INTERNAL_FIORINO_MAX_LATAS",
+  "INTERNAL_CAMINHAO_MAX_KG", "INTERNAL_CAMINHAO_MAX_LATAS",
+  "LALA_LALAPRO_MAX_KG", "LALA_UTILITARIO_MAX_KG", "LALA_VAN_MAX_KG",
+  "LALA_CARRETO_MAX_KG", "LALA_CAMINHAO_MAX_KG",
+  "URGENCY_SURCHARGE_MIN", "DRIVER_MAX_LOCATION_AGE_MIN",
+] as const;
+
+export async function makeFreightDecision(
+  input: FreightDecisionInput
+): Promise<FreightDecisionResult> {
+  // 1. Configs em uma query
+  const rows = await prisma.systemConfig.findMany({
+    where: { key: { in: [...DECISION_CONFIG_KEYS] } },
+  });
+  const cfg = Object.fromEntries(rows.map((r) => [r.key, parseFloat(r.value)])) as
+    VehicleConfig & CostConfig & { URGENCY_SURCHARGE_MIN: number; DRIVER_MAX_LOCATION_AGE_MIN: number };
+
+  // 2. Classificação da carga
+  const cargo = classifyVehicle(input.items, cfg);
+
+  // 3. Rota
+  const route = await resolveRoute(input.originLat, input.originLng, input.destLat, input.destLng);
+
+  // 4. Custo interno
+  const internalCost = calculateInternalCost(route, cfg);
+
+  // 5. Motoristas disponíveis (só se frota própria é viável)
+  const driverCandidates = cargo.internalVehicle !== "EXCEPTION"
+    ? await getAvailableDrivers(input.storeId, cfg.DRIVER_MAX_LOCATION_AGE_MIN ?? 30)
+    : [];
+
+  const scoredDrivers = driverCandidates
+    .map((d) => ({ ...d, score: scoreDriverForDelivery(d, input.originLat, input.originLng, input.destLat, input.destLng) }))
+    .sort((a, b) => b.score - a.score);
+  const bestDriver = scoredDrivers[0] ?? null;
+
+  // 6. Cotação Lalamove (não bloqueia em caso de erro)
+  let lalamoveCost: number | null = null;
+  let lalamoveQuote: FreightDecisionResult["lalamoveQuote"] | undefined;
+
+  if (cargo.lalamoveVehicle !== "EXCEPTION") {
+    try {
+      const origin: LalamoveStop = {
+        coordinates: { lat: String(input.originLat), lng: String(input.originLng) },
+        address: "",
+      };
+      const dest: LalamoveStop = {
+        coordinates: { lat: String(input.destLat), lng: String(input.destLng) },
+        address: "",
+      };
+      // cargo.lalamoveVehicle já é o código da API (ex: "MOTORCYCLE", "VAN")
+      const serviceType = cargo.lalamoveVehicle;
+      const quote = await getLalamoveQuote(origin, dest, input.isUrgent, serviceType);
+      lalamoveCost = parseFloat(quote.priceBreakdown.total);
+      lalamoveQuote = {
+        quotationId:    quote.quotationId,
+        estimatedPrice: lalamoveCost,
+        serviceType:    cargo.lalamoveVehicle,
+      };
+    } catch {
+      // Lalamove indisponível — decisão continua sem cotação externa
+    }
+  }
+
+  // 7. Decisão de modal
+  const decision = decideBestDeliveryOption({
+    internalVehicle: cargo.internalVehicle,
+    lalamoveVehicle: cargo.lalamoveVehicle,
+    bestDriver,
+    internalCost,
+    lalamoveCost,
+    isUrgent: input.isUrgent,
+  });
+
+  // 8. Zona de frete + preço ao cliente
+  const zone = await prisma.freightZone.findFirst({
+    where: {
+      active: true,
+      minKm:  { lte: route.distanceKm },
+      OR:     [{ maxKm: null }, { maxKm: { gt: route.distanceKm } }],
+    },
+    orderBy: { minKm: "asc" },
+  });
+
+  const suggestedPrice = calculateCustomerPrice({
+    zone,
+    internalCost,
+    lalamoveCost,
+    selectedMode:     decision.mode,
+    internalVehicle:  cargo.internalVehicle,
+    isUrgent:         input.isUrgent,
+    urgencySurcharge: cfg.URGENCY_SURCHARGE_MIN ?? 1.3,
+  });
+
+  const result: FreightDecisionResult = {
+    selectedMode:             decision.mode,
+    selectedVehicle:          decision.vehicle,
+    driverId:                 decision.driverId,
+    requiresManualAssignment: decision.requiresManualAssignment,
+    lalamoveQuote,
+    distanceKm:      route.distanceKm,
+    durationMinutes: route.durationMin,
+    isApproximate:   route.isApproximate,
+    internalCost,
+    lalamoveCost,
+    suggestedPrice,
+    decisionReason: decision.reason,
+  };
+
+  // 9. Log assíncrono — não bloqueia a resposta
+  prisma.freightDecisionLog.create({
+    data: {
+      storeId:         input.storeId,
+      selectedMode:    decision.mode,
+      selectedVehicle: String(decision.vehicle),
+      driverId:        decision.driverId,
+      distanceKm:      route.distanceKm,
+      durationMin:     route.durationMin,
+      internalCost,
+      lalamoveCost,
+      suggestedPrice,
+      decisionReason:  decision.reason,
+      isUrgent:        input.isUrgent,
+      isApproximate:   route.isApproximate,
+      totalWeightKg:   cargo.totalWeightKg,
+      totalLatas:      cargo.totalLatas || null,
+    },
+  }).catch((err: unknown) => console.error("[FreightDecision] log error:", err));
+
+  return result;
 }
