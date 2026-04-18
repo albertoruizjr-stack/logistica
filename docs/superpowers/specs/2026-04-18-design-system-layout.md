@@ -10,7 +10,7 @@ Refatorar completamente o front-end do sistema em uma interface clara, moderna e
 
 Referência: ferramentas SaaS operacionais como Linear, Vercel Dashboard e Retool. Densidade inteligente: o usuário vê muita informação útil sem se sentir sobrecarregado.
 
-**Escopo desta spec:** Design System (tokens) + Layout Base + 9 componentes reutilizáveis.
+**Escopo desta spec:** Design System (tokens) + Layout Base + 10 componentes reutilizáveis.
 **Fora do escopo:** Refatoração de telas (spec separada, começa por Solicitações).
 
 ---
@@ -175,6 +175,10 @@ Unidade base: 4px (padrão Tailwind). Tokens de uso:
 
 **Badge de urgência:** aparece no item "Solicitações" quando há entregas urgentes pendentes. Fundo `orange-600`, texto `white`, formato pill. Oculto quando count = 0.
 
+**Preparação para modo colapsado (implementação futura):**
+
+A sidebar recebe uma prop `collapsed?: boolean` (padrão `false`). Quando `collapsed=true`, a largura encolhe para 56px e apenas os ícones de cada item são exibidos (labels e group headings ocultos com `hidden`). O layout usa `transition-all duration-200` na largura. Nesta spec, implementamos apenas o modo expandido — o modo colapsado **não é implementado**, mas a estrutura de componente (ícone obrigatório em cada item) e a prop já devem existir para não exigir refatoração futura. Cada item de menu terá obrigatoriamente um `icon: LucideIcon` além do `label`.
+
 ---
 
 ### 2.3 Header
@@ -236,10 +240,13 @@ interface PageHeaderProps {
   title: string
   description?: string
   actions?: React.ReactNode
+  loading?: boolean   // exibe skeleton de título + description quando true
 }
 ```
 
 Layout: linha com `title` à esquerda, `actions` à direita. `description` abaixo do título em `text-sm text-slate-500`. Separado do conteúdo por `border-b border-slate-200 pb-4 mb-6`.
+
+Quando `loading=true`: título substituído por skeleton `h-5 w-48 rounded`, description por `h-3 w-64 rounded`, actions não renderizadas.
 
 ---
 
@@ -267,11 +274,14 @@ interface CardProps {
   description?: string
   actions?: React.ReactNode
   padding?: "sm" | "md" | "lg"   // p-3, p-4, p-5
+  loading?: boolean               // exibe overlay skeleton sobre o conteúdo
   children: React.ReactNode
 }
 ```
 
 Container base: `bg-white rounded-lg border border-slate-200 shadow-sm`. Header interno com `title` + `actions` separado por `border-b` quando presente.
+
+Quando `loading=true`: conteúdo substituído por 3 linhas skeleton (`h-4 w-full`, `h-4 w-3/4`, `h-4 w-1/2`) com `animate-pulse`. Header não é afetado (título e ações continuam visíveis).
 
 ---
 
@@ -291,6 +301,7 @@ interface DataTableProps<T> {
   columns: Column<T>[]
   data: T[]
   loading?: boolean
+  density?: "default" | "compact"  // default: h-[52px]/py-3; compact: h-[36px]/py-1.5
   onRowClick?: (row: T) => void
   rowActions?: (row: T) => React.ReactNode   // coluna de ações no final
   sortKey?: string
@@ -310,9 +321,10 @@ interface DataTableProps<T> {
 - Hover de linha: `hover:bg-slate-50 cursor-pointer` quando `onRowClick` definido
 - Coluna de ações: sempre última, `w-[60px]`, alinhada à direita
 - Truncamento: células com `truncate` mostram tooltip nativo (`title`) no hover
-- Ordenação: ícone `↕ ↑ ↓` no header clicável, estado controlado externamente
+- Ordenação: ícone `↕ ↑ ↓` no header clicável, estado controlado externamente via `onSort` + `sortKey` + `sortDirection`
 - Paginação: rodapé com `Anterior / Próxima` + `Página X de Y` + total de registros
-- Loading: skeleton de 5 linhas (sem spinner central)
+- Loading: skeleton de 5 linhas com `animate-pulse` (altura varia por `density`), sem spinner central
+- Densidade: `default` usa `py-3` nas células; `compact` usa `py-1.5` e `text-xs` — indicado para tabelas com muitas linhas (ex: auditoria)
 
 ---
 
@@ -327,7 +339,8 @@ type StatusVariant =
 interface StatusBadgeProps {
   status: StatusVariant
   size?: "sm" | "md"
-  showIcon?: boolean
+  showIcon?: boolean         // usa o ícone padrão do mapa abaixo
+  icon?: LucideIcon          // sobrescreve o ícone padrão quando fornecido
 }
 ```
 
@@ -436,6 +449,35 @@ Exemplos de uso: fallback Haversine ativo, auditoria bloqueando despacho, erro d
 
 ---
 
+### 3.10 `<ErrorState />`
+
+```typescript
+type ErrorSource = "ERP" | "Maps" | "Lalamove" | "Database" | "Unknown"
+
+interface ErrorStateProps {
+  source: ErrorSource
+  title?: string           // se omitido, usa título padrão por source (ver mapa abaixo)
+  description?: string     // detalhes adicionais (ex: mensagem de erro técnica resumida)
+  onRetry?: () => void     // botão "Tentar novamente" — omitido quando ação não faz sentido
+}
+```
+
+Centralizado vertical e horizontalmente dentro do container pai (mesmo layout de `EmptyState`). Ícone 40px fixo `AlertCircle` em `red-400`. Título em `text-sm font-medium text-slate-700`. Description em `text-sm text-slate-400`. Botão "Tentar novamente" secundário (outline) quando `onRetry` fornecido.
+
+**Títulos padrão por source:**
+
+| Source | Título padrão |
+|---|---|
+| `ERP` | Erro ao buscar dados do ERP |
+| `Maps` | Erro ao calcular rota |
+| `Lalamove` | Cotação Lalamove indisponível |
+| `Database` | Erro ao carregar dados |
+| `Unknown` | Algo deu errado |
+
+**Uso típico:** substituir o conteúdo de um `<Card>` quando um `useEffect` retorna erro da API. A tela em si não quebra — só o card afetado exibe o estado de erro.
+
+---
+
 ## 4. Arquivos a criar/modificar
 
 | Arquivo | Ação | Responsabilidade |
@@ -454,6 +496,7 @@ Exemplos de uso: fallback Haversine ativo, auditoria bloqueando despacho, erro d
 | `components/ui/empty-state.tsx` | Criar | EmptyState |
 | `components/ui/key-value-list.tsx` | Criar | KeyValueList / InfoRow |
 | `components/ui/alert-banner.tsx` | Criar | AlertBanner com 4 variantes |
+| `components/ui/error-state.tsx` | Criar | ErrorState com 5 sources e retry |
 
 ---
 
