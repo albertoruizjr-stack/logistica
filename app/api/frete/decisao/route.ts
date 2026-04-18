@@ -50,6 +50,11 @@ export async function POST(req: NextRequest) {
       deliveryWindowEnd:   new Date(parsed.data.deliveryWindowEnd),
     };
 
+    // Vendedor só pode consultar sua própria loja; OPERATOR e ADMIN podem consultar qualquer loja
+    if (session.role === "SELLER" && session.storeId !== input.storeId) {
+      return NextResponse.json(apiError("Sem permissão para esta loja", "FORBIDDEN"), { status: 403 });
+    }
+
     const result = await makeFreightDecision(input);
     return NextResponse.json(apiSuccess(result));
   } catch (error) {

@@ -358,21 +358,21 @@ describe("makeFreightDecision (integração com mocks)", () => {
 
   beforeEach(() => {
     vi.mocked(prisma.systemConfig.findMany).mockResolvedValue([
-      { id: "1",  key: "COST_PER_KM",                value: "1.50",  type: "number", label: "x", storeId: null, createdAt: new Date(), updatedAt: new Date() },
-      { id: "2",  key: "COST_PER_HOUR",              value: "30.00", type: "number", label: "x", storeId: null, createdAt: new Date(), updatedAt: new Date() },
-      { id: "3",  key: "FIXED_ROUTE_COST",           value: "8.00",  type: "number", label: "x", storeId: null, createdAt: new Date(), updatedAt: new Date() },
-      { id: "4",  key: "INTERNAL_MOTO_MAX_KG",       value: "20",    type: "number", label: "x", storeId: null, createdAt: new Date(), updatedAt: new Date() },
-      { id: "5",  key: "INTERNAL_FIORINO_MAX_KG",    value: "500",   type: "number", label: "x", storeId: null, createdAt: new Date(), updatedAt: new Date() },
-      { id: "6",  key: "INTERNAL_FIORINO_MAX_LATAS", value: "20",    type: "number", label: "x", storeId: null, createdAt: new Date(), updatedAt: new Date() },
-      { id: "7",  key: "INTERNAL_CAMINHAO_MAX_KG",   value: "1500",  type: "number", label: "x", storeId: null, createdAt: new Date(), updatedAt: new Date() },
-      { id: "8",  key: "INTERNAL_CAMINHAO_MAX_LATAS", value: "67",   type: "number", label: "x", storeId: null, createdAt: new Date(), updatedAt: new Date() },
-      { id: "9",  key: "LALA_LALAPRO_MAX_KG",        value: "20",    type: "number", label: "x", storeId: null, createdAt: new Date(), updatedAt: new Date() },
-      { id: "10", key: "LALA_UTILITARIO_MAX_KG",     value: "500",   type: "number", label: "x", storeId: null, createdAt: new Date(), updatedAt: new Date() },
-      { id: "11", key: "LALA_VAN_MAX_KG",            value: "1000",  type: "number", label: "x", storeId: null, createdAt: new Date(), updatedAt: new Date() },
-      { id: "12", key: "LALA_CARRETO_MAX_KG",        value: "1500",  type: "number", label: "x", storeId: null, createdAt: new Date(), updatedAt: new Date() },
-      { id: "13", key: "LALA_CAMINHAO_MAX_KG",       value: "2500",  type: "number", label: "x", storeId: null, createdAt: new Date(), updatedAt: new Date() },
-      { id: "14", key: "URGENCY_SURCHARGE_MIN",      value: "1.30",  type: "number", label: "x", storeId: null, createdAt: new Date(), updatedAt: new Date() },
-      { id: "15", key: "DRIVER_MAX_LOCATION_AGE_MIN", value: "30",   type: "number", label: "x", storeId: null, createdAt: new Date(), updatedAt: new Date() },
+      { id: "1",  key: "COST_PER_KM",                value: "1.50",  type: "number", label: "x", updatedAt: new Date() },
+      { id: "2",  key: "COST_PER_HOUR",              value: "30.00", type: "number", label: "x", updatedAt: new Date() },
+      { id: "3",  key: "FIXED_ROUTE_COST",           value: "8.00",  type: "number", label: "x", updatedAt: new Date() },
+      { id: "4",  key: "INTERNAL_MOTO_MAX_KG",       value: "20",    type: "number", label: "x", updatedAt: new Date() },
+      { id: "5",  key: "INTERNAL_FIORINO_MAX_KG",    value: "500",   type: "number", label: "x", updatedAt: new Date() },
+      { id: "6",  key: "INTERNAL_FIORINO_MAX_LATAS", value: "20",    type: "number", label: "x", updatedAt: new Date() },
+      { id: "7",  key: "INTERNAL_CAMINHAO_MAX_KG",   value: "1500",  type: "number", label: "x", updatedAt: new Date() },
+      { id: "8",  key: "INTERNAL_CAMINHAO_MAX_LATAS", value: "67",   type: "number", label: "x", updatedAt: new Date() },
+      { id: "9",  key: "LALA_LALAPRO_MAX_KG",        value: "20",    type: "number", label: "x", updatedAt: new Date() },
+      { id: "10", key: "LALA_UTILITARIO_MAX_KG",     value: "500",   type: "number", label: "x", updatedAt: new Date() },
+      { id: "11", key: "LALA_VAN_MAX_KG",            value: "1000",  type: "number", label: "x", updatedAt: new Date() },
+      { id: "12", key: "LALA_CARRETO_MAX_KG",        value: "1500",  type: "number", label: "x", updatedAt: new Date() },
+      { id: "13", key: "LALA_CAMINHAO_MAX_KG",       value: "2500",  type: "number", label: "x", updatedAt: new Date() },
+      { id: "14", key: "URGENCY_SURCHARGE_MIN",      value: "1.30",  type: "number", label: "x", updatedAt: new Date() },
+      { id: "15", key: "DRIVER_MAX_LOCATION_AGE_MIN", value: "30",   type: "number", label: "x", updatedAt: new Date() },
     ]);
 
     vi.mocked(resolveRoute).mockResolvedValue({

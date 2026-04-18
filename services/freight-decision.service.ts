@@ -382,7 +382,9 @@ export async function makeFreightDecision(
   };
 
   // 9. Log assíncrono — não bloqueia a resposta
-  prisma.freightDecisionLog.create({
+  // Log assíncrono: void intencional — não bloqueia resposta.
+  // Em Vercel serverless, usar next/server `after()` (Next 15) se precisar de garantia de entrega.
+  void prisma.freightDecisionLog.create({
     data: {
       storeId:         input.storeId,
       selectedMode:    decision.mode,
