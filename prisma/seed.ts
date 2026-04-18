@@ -136,6 +136,25 @@ async function main() {
     { key: "INTERNAL_ROUTE_CUTOFF_HOUR", value: "16", type: "number", label: "Hora de corte para rota do dia (h)" },
     { key: "SPOKE_API_URL", value: "", type: "string", label: "URL da API Spoke" },
     { key: "SPOKE_API_KEY", value: "", type: "string", label: "Chave API Spoke" },
+    // Motor de Decisão de Frete — frota própria
+    { key: "COST_PER_KM",               value: "1.50",  type: "number", label: "Custo por km (frota própria)" },
+    { key: "COST_PER_HOUR",             value: "30.00", type: "number", label: "Custo por hora de rota" },
+    { key: "FIXED_ROUTE_COST",          value: "8.00",  type: "number", label: "Custo fixo por saída" },
+    { key: "INTERNAL_MOTO_MAX_KG",      value: "20",    type: "number", label: "Peso máximo moto (kg)" },
+    { key: "INTERNAL_FIORINO_MAX_KG",   value: "500",   type: "number", label: "Peso máximo fiorino (kg)" },
+    { key: "INTERNAL_FIORINO_MAX_LATAS", value: "20",   type: "number", label: "Latas máximo fiorino" },
+    { key: "INTERNAL_CAMINHAO_MAX_KG",  value: "1500",  type: "number", label: "Peso máximo caminhão (kg)" },
+    { key: "INTERNAL_CAMINHAO_MAX_LATAS", value: "67",  type: "number", label: "Latas máximo caminhão" },
+    // Motor de Decisão de Frete — Lalamove
+    { key: "LALA_LALAPRO_MAX_KG",       value: "20",    type: "number", label: "LalaPro — peso máximo (kg)" },
+    { key: "LALA_UTILITARIO_MAX_KG",    value: "500",   type: "number", label: "Utilitário Lalamove — peso máximo (kg)" },
+    { key: "LALA_VAN_MAX_KG",           value: "1000",  type: "number", label: "Van Lalamove — peso máximo (kg)" },
+    { key: "LALA_CARRETO_MAX_KG",       value: "1500",  type: "number", label: "Carreto Lalamove — peso máximo (kg)" },
+    { key: "LALA_CAMINHAO_MAX_KG",      value: "2500",  type: "number", label: "Caminhão Lalamove — peso máximo (kg)" },
+    // Motor de Decisão de Frete — preço
+    { key: "URGENCY_SURCHARGE_MIN",     value: "1.30",  type: "number", label: "Sobretaxa urgência (padrão)" },
+    { key: "URGENCY_SURCHARGE_MAX",     value: "1.50",  type: "number", label: "Sobretaxa urgência (pico)" },
+    { key: "DRIVER_MAX_LOCATION_AGE_MIN", value: "30",  type: "number", label: "Idade máx localização motorista (min)" },
   ];
 
   for (const config of configs) {
