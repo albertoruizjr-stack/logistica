@@ -56,14 +56,15 @@ function buildHeaders(method: string, path: string, body: string = ""): HeadersI
 // ──────────────────────────────────────────────
 
 export async function getLalamoveQuote(
-  originStop: LalamoveStop,
+  originStop:      LalamoveStop,
   destinationStop: LalamoveStop,
-  isUrgent: boolean = false
+  isUrgent:        boolean = false,
+  serviceType:     string = LALAMOVE_SERVICE_TYPE
 ): Promise<LalamoveQuoteResponse> {
   const path = "/v3/quotations";
   const body: LalamoveQuoteRequest = {
     language: "pt_BR",
-    serviceType: LALAMOVE_SERVICE_TYPE,
+    serviceType: serviceType,
     specialRequests: [],
     stops: [originStop, destinationStop],
     item: {

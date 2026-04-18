@@ -3,6 +3,8 @@
 // Funções puras recebem configs como parâmetro — sem Prisma — para facilitar testes.
 
 import { InternalVehicleType, LalamoveServiceType } from "@/types";
+import { prisma } from "@/lib/prisma";
+import { DispatchStatus } from "@prisma/client";
 import type {
   FreightDecisionInput,
   VehicleConfig,
@@ -216,4 +218,46 @@ export function calculateCustomerPrice(params: {
   }
 
   return isUrgent ? basePrice * urgencySurcharge : basePrice;
+}
+
+// ──────────────────────────────────────────────
+// PASSO 4 — MOTORISTAS DISPONÍVEIS
+// ──────────────────────────────────────────────
+
+export interface AvailableDriver {
+  id:               string;
+  name:             string;
+  lastLat:          number | null;
+  lastLng:          number | null;
+  activeDispatches: number;
+}
+
+export async function getAvailableDrivers(
+  storeId:           string,
+  maxLocationAgeMin: number
+): Promise<AvailableDriver[]> {
+  const cutoff = new Date(Date.now() - maxLocationAgeMin * 60 * 1000);
+
+  const drivers = await prisma.driver.findMany({
+    where: { storeId, active: true, available: true },
+    include: {
+      locations: {
+        where:   { timestamp: { gte: cutoff } },
+        orderBy: { timestamp: "desc" },
+        take:    1,
+      },
+      dispatches: {
+        where:  { status: { in: [DispatchStatus.PENDING, DispatchStatus.ASSIGNED, DispatchStatus.IN_TRANSIT] } },
+        select: { id: true },
+      },
+    },
+  });
+
+  return drivers.map((d) => ({
+    id:               d.id,
+    name:             d.name,
+    lastLat:          d.locations[0]?.lat ?? null,
+    lastLng:          d.locations[0]?.lng ?? null,
+    activeDispatches: d.dispatches.length,
+  }));
 }
