@@ -4,6 +4,7 @@ import {
   calculateInternalCost,
   scoreDriverForDelivery,
   decideBestDeliveryOption,
+  calculateCustomerPrice,
 } from "@/services/freight-decision.service";
 import { InternalVehicleType, LalamoveServiceType } from "@/types";
 import type { VehicleConfig } from "@/types";
@@ -231,5 +232,83 @@ describe("decideBestDeliveryOption", () => {
     });
     expect(r.mode).toBe("INTERNAL");
     expect(r.requiresManualAssignment).toBe(true);
+  });
+});
+
+describe("calculateCustomerPrice", () => {
+  const zone = { basePrice: 25 };
+
+  it("interno FIORINO: MAX(zona=25, custo 20 × 1.4=28) → 28", () => {
+    const price = calculateCustomerPrice({
+      zone,
+      internalCost:    20,
+      lalamoveCost:    40,
+      selectedMode:    "INTERNAL",
+      internalVehicle: InternalVehicleType.FIORINO,
+      isUrgent:        false,
+      urgencySurcharge: 1.3,
+    });
+    expect(price).toBeCloseTo(28, 2);
+  });
+
+  it("interno MOTO: MAX(zona=25, custo 10 × 1.8=18) → usa zona (25)", () => {
+    const price = calculateCustomerPrice({
+      zone,
+      internalCost:    10,
+      lalamoveCost:    null,
+      selectedMode:    "INTERNAL",
+      internalVehicle: InternalVehicleType.MOTO,
+      isUrgent:        false,
+      urgencySurcharge: 1.3,
+    });
+    expect(price).toBeCloseTo(25, 2);
+  });
+
+  it("Lalamove: MAX(zona=25, custo 30 × 1.15=34.5) → 34.5", () => {
+    const price = calculateCustomerPrice({
+      zone,
+      internalCost:    20,
+      lalamoveCost:    30,
+      selectedMode:    "LALAMOVE",
+      internalVehicle: InternalVehicleType.FIORINO,
+      isUrgent:        false,
+      urgencySurcharge: 1.3,
+    });
+    expect(price).toBeCloseTo(34.5, 2);
+  });
+
+  it("urgente aplica sobretaxa de 1.3×", () => {
+    const normal = calculateCustomerPrice({
+      zone,
+      internalCost:    20,
+      lalamoveCost:    null,
+      selectedMode:    "INTERNAL",
+      internalVehicle: InternalVehicleType.FIORINO,
+      isUrgent:        false,
+      urgencySurcharge: 1.3,
+    });
+    const urgent = calculateCustomerPrice({
+      zone,
+      internalCost:    20,
+      lalamoveCost:    null,
+      selectedMode:    "INTERNAL",
+      internalVehicle: InternalVehicleType.FIORINO,
+      isUrgent:        true,
+      urgencySurcharge: 1.3,
+    });
+    expect(urgent).toBeCloseTo(normal * 1.3, 2);
+  });
+
+  it("zona null → usa apenas custo × margem", () => {
+    const price = calculateCustomerPrice({
+      zone: null,
+      internalCost:    20,
+      lalamoveCost:    null,
+      selectedMode:    "INTERNAL",
+      internalVehicle: InternalVehicleType.FIORINO,
+      isUrgent:        false,
+      urgencySurcharge: 1.3,
+    });
+    expect(price).toBeCloseTo(28, 2); // 20 × 1.4
   });
 });

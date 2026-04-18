@@ -9,6 +9,7 @@ import type {
   CostConfig,
 } from "@/types";
 import { calculateHaversineDistance } from "@/lib/utils";
+import { INTERNAL_VEHICLE_MARGINS, LALAMOVE_PRICE_MARGIN } from "@/lib/constants";
 
 // ──────────────────────────────────────────────
 // PASSO 1 — CLASSIFICAÇÃO DA CARGA
@@ -186,4 +187,33 @@ export function decideBestDeliveryOption(p: DecisionParams): ModalDecisionResult
     requiresManualAssignment: true,
     reason: "Nenhum recurso disponível — requer atribuição manual pelo operador",
   };
+}
+
+// ──────────────────────────────────────────────
+// PASSO 8 — PREÇO SUGERIDO AO CLIENTE
+// MAX(zona, custo_real × margem) + sobretaxa de urgência
+// ──────────────────────────────────────────────
+
+export function calculateCustomerPrice(params: {
+  zone:             { basePrice: number } | null;
+  internalCost:     number;
+  lalamoveCost:     number | null;
+  selectedMode:     "INTERNAL" | "LALAMOVE";
+  internalVehicle:  InternalVehicleType | "EXCEPTION";
+  isUrgent:         boolean;
+  urgencySurcharge: number;
+}): number {
+  const { zone, internalCost, lalamoveCost, selectedMode, internalVehicle, isUrgent, urgencySurcharge } = params;
+
+  let basePrice: number;
+
+  if (selectedMode === "INTERNAL" && internalVehicle !== "EXCEPTION") {
+    const margin = INTERNAL_VEHICLE_MARGINS[internalVehicle] ?? 1.3;
+    basePrice = Math.max(zone?.basePrice ?? 0, internalCost * margin);
+  } else {
+    const lalamoveBase = lalamoveCost != null ? lalamoveCost * LALAMOVE_PRICE_MARGIN : 0;
+    basePrice = Math.max(zone?.basePrice ?? 0, lalamoveBase);
+  }
+
+  return isUrgent ? basePrice * urgencySurcharge : basePrice;
 }
