@@ -593,3 +593,29 @@ model SystemConfig {
 
   @@map("system_configs")
 }
+
+// ──────────────────────────────────────────────
+// LOG DE DECISÃO DE FRETE (auditoria e otimização futura)
+// ──────────────────────────────────────────────
+
+model FreightDecisionLog {
+  id                String   @id @default(cuid())
+  storeId           String
+  deliveryRequestId String?
+  selectedMode      String   // "INTERNAL" | "LALAMOVE"
+  selectedVehicle   String   // InternalVehicleType | LalamoveServiceType
+  driverId          String?
+  distanceKm        Float
+  durationMin       Float
+  internalCost      Float
+  lalamoveCost      Float?
+  suggestedPrice    Float
+  decisionReason    String
+  isUrgent          Boolean
+  isApproximate     Boolean
+  totalWeightKg     Float
+  totalLatas        Int?
+  createdAt         DateTime @default(now())
+
+  @@map("freight_decision_logs")
+}
