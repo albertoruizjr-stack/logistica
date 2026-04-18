@@ -6,7 +6,6 @@ import { InternalVehicleType, LalamoveServiceType } from "@/types";
 import type {
   FreightDecisionInput,
   VehicleConfig,
-  CostConfig,
 } from "@/types";
 
 // ──────────────────────────────────────────────
@@ -32,6 +31,7 @@ export function classifyVehicle(
   const latasOk = (max: number) => totalLatas === 0 || totalLatas <= max;
 
   if (totalWeightKg <= config.INTERNAL_MOTO_MAX_KG) {
+    // MOTO: sem limite de latas — peso é o único critério (regra de negócio)
     internalVehicle = InternalVehicleType.MOTO;
   } else if (totalWeightKg <= config.INTERNAL_FIORINO_MAX_KG && latasOk(config.INTERNAL_FIORINO_MAX_LATAS)) {
     internalVehicle = InternalVehicleType.FIORINO;
