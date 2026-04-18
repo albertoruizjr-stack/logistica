@@ -1,0 +1,595 @@
+// Sistema de Gestão Logística — Mestre da Pintura
+// Prisma Schema — PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")        // pooler (app) — porta 6543 no Supabase
+  directUrl = env("DIRECT_URL")          // conexão direta — porta 5432 — usado pelo prisma migrate
+}
+
+// ──────────────────────────────────────────────
+// ENUMERAÇÕES
+// ──────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  OPERATOR   // logística — pode despachar, ver tudo
+  SELLER     // vendedor — cria solicitações e cotações
+  DRIVER     // motorista — atualiza localização, confirma entregas
+}
+
+enum DeliveryType {
+  STANDARD   // entrega no dia seguinte, rota interna
+  URGENT     // entrega hoje, pode usar Lalamove
+  EXCEPTION  // fora das regras normais — requer aprovação
+}
+
+enum DeliveryRequestStatus {
+  PENDING            // criada, aguardando análise
+  AWAITING_ITEMS     // itens sendo separados na loja
+  AWAITING_TRANSFER  // aguardando chegada de transferência
+  READY              // tudo separado, pronto para despacho
+  DISPATCHED         // despachado para rota ou Lalamove
+  IN_TRANSIT         // motorista a caminho
+  DELIVERED          // entregue ao cliente
+  CANCELLED          // cancelada
+}
+
+enum TransferStatus {
+  PENDING      // criada, aguardando aprovação
+  APPROVED     // aprovada pelo operador
+  PREPARING    // loja de origem separando os itens
+  IN_TRANSIT   // a caminho da loja de destino
+  RECEIVED     // recebida na loja de destino
+  CANCELLED    // cancelada
+}
+
+enum TransferPriority {
+  ANTICIPATED  // antecipada — programada com antecedência
+  ON_ROUTE     // na rota — vai junto com uma entrega existente
+  URGENT       // urgente — saída imediata, pode usar Lalamove
+}
+
+enum DispatchStatus {
+  PENDING     // aguardando atribuição de motorista ou modal
+  ASSIGNED    // motorista atribuído
+  IN_TRANSIT  // em movimento
+  COMPLETED   // entregue / transferência concluída
+  FAILED      // falha — devolvido ou não concluído
+}
+
+enum DispatchModal {
+  INTERNAL_ROUTE  // rota interna com motorista próprio
+  LALAMOVE        // despacho via Lalamove
+  PARTNER         // parceiro próprio (99, etc.)
+  EXCEPTION       // exceção operacional — registra manualmente
+}
+
+enum DeviationClassification {
+  WITHIN_RULE  // desvio dentro da tolerância configurada
+  BELOW_RULE   // cobrado abaixo do sugerido (subsídio — alerta, sem bloqueio)
+  ABOVE_RULE   // cobrado acima da tolerância (overcharge — exige justificativa)
+}
+
+enum RouteSource {
+  GOOGLE_MAPS  // distância via API do Google Maps (ou cache de dados do Google)
+  HAVERSINE    // fallback — linha reta (isApproximate = true)
+}
+
+// ──────────────────────────────────────────────
+// LOJAS
+// ──────────────────────────────────────────────
+
+model Store {
+  id          String  @id @default(cuid())
+  code        String  @unique  // 067, 131, 132, 173, 191
+  name        String
+  address     String
+  city        String  @default("São Paulo")
+  state       String  @default("SP")
+  lat         Float
+  lng         Float
+  phone       String?
+  active      Boolean @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users             User[]
+  deliveryRequests  DeliveryRequest[]
+  freightQuotes     FreightQuote[]
+  transfersFrom     Transfer[]        @relation("TransferFrom")
+  transfersTo       Transfer[]        @relation("TransferTo")
+  dispatches        Dispatch[]
+  drivers           Driver[]
+  auditConfigs      AuditConfig[]
+
+  @@map("stores")
+}
+
+// ──────────────────────────────────────────────
+// USUÁRIOS
+// ──────────────────────────────────────────────
+
+model User {
+  id        String   @id @default(cuid())
+  name      String
+  email     String   @unique
+  password  String
+  role      Role
+  storeId   String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  store             Store             @relation(fields: [storeId], references: [id])
+  deliveryRequests  DeliveryRequest[]
+  freightQuotes     FreightQuote[]
+  dispatches        Dispatch[]        @relation("DispatchedBy")
+  transfersRequested Transfer[]       @relation("TransferRequestedBy")
+  transfersApproved  Transfer[]       @relation("TransferApprovedBy")
+  auditJustifications FreightAudit[] @relation("AuditJustifiedBy")
+  auditSales          FreightAudit[] @relation("AuditSeller")
+
+  @@map("users")
+}
+
+// ──────────────────────────────────────────────
+// TABELA DE FRETE POR ZONA
+// ──────────────────────────────────────────────
+
+model FreightZone {
+  id            String  @id @default(cuid())
+  name          String  // Ex: "Zona 1 — até 3 km"
+  minKm         Float
+  maxKm         Float?  // null = sem limite superior (sob consulta)
+  basePrice     Float   // valor em R$
+  urgentFactor  Float   @default(1.8)  // multiplicador para urgente
+  underConsultation Boolean @default(false) // acima de 20km
+  active        Boolean @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  freightQuotes FreightQuote[]
+
+  @@map("freight_zones")
+}
+
+// ──────────────────────────────────────────────
+// COTAÇÃO DE FRETE
+// ──────────────────────────────────────────────
+
+model FreightQuote {
+  id              String       @id @default(cuid())
+  storeId         String
+  originAddress   String
+  originLat       Float
+  originLng       Float
+  destAddress     String
+  destLat         Float
+  destLng         Float
+  distanceKm      Float
+  zoneId          String?
+  suggestedPrice  Float
+  isUrgent        Boolean      @default(false)
+  urgentFactor    Float?
+  estimatedDays   Int          @default(1)  // 1 = amanhã, 0 = hoje
+  durationMinutes Float?                    // duração real de rota em minutos (Google Maps)
+  isApproximate   Boolean      @default(false) // true = distância via Haversine (fallback)
+  deliveryType    DeliveryType
+  createdById     String
+  createdAt       DateTime     @default(now())
+
+  store           Store           @relation(fields: [storeId], references: [id])
+  zone            FreightZone?    @relation(fields: [zoneId], references: [id])
+  createdBy       User            @relation(fields: [createdById], references: [id])
+  deliveryRequest DeliveryRequest?
+
+  @@map("freight_quotes")
+}
+
+// ──────────────────────────────────────────────
+// SOLICITAÇÃO DE ENTREGA
+// ──────────────────────────────────────────────
+
+model DeliveryRequest {
+  id              String                @id @default(cuid())
+  invoiceNumber   String                @unique
+  storeId         String
+  sellerId        String
+  // dados do cliente vindos do ERP
+  customerId      String?
+  customerName    String
+  customerPhone   String?
+  customerDoc     String?  // CPF/CNPJ
+  // endereço de entrega
+  deliveryAddress String
+  deliveryComplement String?
+  deliveryCity    String?
+  deliveryLat     Float?
+  deliveryLng     Float?
+  // controle
+  status          DeliveryRequestStatus @default(PENDING)
+  deliveryType    DeliveryType          @default(STANDARD)
+  isComplete      Boolean               @default(false) // todos os itens disponíveis?
+  freightQuoteId  String?               @unique
+  chargedFreight  Float?   // valor cobrado do cliente pelo vendedor
+  totalValue      Float?   // valor total da NF
+  notes           String?
+  scheduledFor    DateTime?  // quando deve ser entregue
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  store        Store          @relation(fields: [storeId], references: [id])
+  seller       User           @relation(fields: [sellerId], references: [id])
+  freightQuote FreightQuote?  @relation(fields: [freightQuoteId], references: [id])
+  items        DeliveryItem[]
+  transfers    Transfer[]
+  dispatch     Dispatch?
+  audit        FreightAudit?
+
+  @@map("delivery_requests")
+}
+
+// ──────────────────────────────────────────────
+// ITENS DA SOLICITAÇÃO
+// ──────────────────────────────────────────────
+
+model DeliveryItem {
+  id                String  @id @default(cuid())
+  deliveryRequestId String
+  productCode       String
+  productName       String
+  quantity          Float
+  unit              String  @default("UN")
+  // disponibilidade por loja
+  availableAtStore  Boolean @default(true)
+  sourceStoreId     String?  // qual loja tem o item (pode ser diferente da loja de origem)
+  transferId        String?  // se precisou de transferência
+  createdAt         DateTime @default(now())
+
+  deliveryRequest DeliveryRequest @relation(fields: [deliveryRequestId], references: [id], onDelete: Cascade)
+
+  @@map("delivery_items")
+}
+
+// ──────────────────────────────────────────────
+// TRANSFERÊNCIA (entidade de domínio principal)
+// ──────────────────────────────────────────────
+
+model Transfer {
+  id                String           @id @default(cuid())
+  // referência à solicitação de entrega (pode ser nula — transferência autônoma)
+  deliveryRequestId String?
+  fromStoreId       String
+  toStoreId         String
+  priority          TransferPriority
+  status            TransferStatus   @default(PENDING)
+  requestedById     String?
+  approvedById      String?
+  // datas do ciclo de vida
+  requestedAt       DateTime         @default(now())
+  approvedAt        DateTime?
+  preparingAt       DateTime?
+  dispatchedAt      DateTime?
+  receivedAt        DateTime?
+  cancelledAt       DateTime?
+  updatedAt         DateTime         @updatedAt
+  // contexto
+  notes             String?
+  internalNotes     String?  // notas do operador, não visíveis ao vendedor
+  estimatedArrival  DateTime?
+
+  deliveryRequest DeliveryRequest? @relation(fields: [deliveryRequestId], references: [id])
+  fromStore       Store            @relation("TransferFrom", fields: [fromStoreId], references: [id])
+  toStore         Store            @relation("TransferTo", fields: [toStoreId], references: [id])
+  requestedBy     User?            @relation("TransferRequestedBy", fields: [requestedById], references: [id])
+  approvedBy      User?            @relation("TransferApprovedBy", fields: [approvedById], references: [id])
+  items           TransferItem[]
+  dispatch        Dispatch?        @relation("TransferDispatch")
+  history         TransferHistory[]
+
+  @@map("transfers")
+}
+
+// histórico de status das transferências para rastreabilidade
+model TransferHistory {
+  id           String         @id @default(cuid())
+  transferId   String
+  fromStatus   TransferStatus?
+  toStatus     TransferStatus
+  changedById  String?
+  notes        String?
+  createdAt    DateTime       @default(now())
+
+  transfer Transfer @relation(fields: [transferId], references: [id])
+
+  @@map("transfer_history")
+}
+
+// ──────────────────────────────────────────────
+// ITENS DA TRANSFERÊNCIA
+// ──────────────────────────────────────────────
+
+model TransferItem {
+  id           String  @id @default(cuid())
+  transferId   String
+  productCode  String
+  productName  String
+  quantity     Float   // quantidade solicitada
+  unit         String  @default("UN")
+  sentQty      Float?  // quantidade enviada (pode ser menor)
+  receivedQty  Float?  // quantidade confirmada no recebimento
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  transfer Transfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+
+  @@map("transfer_items")
+}
+
+// ──────────────────────────────────────────────
+// DESPACHO
+// ──────────────────────────────────────────────
+
+model Dispatch {
+  id                String        @id @default(cuid())
+  // despacho pode ser de uma entrega OU de uma transferência
+  deliveryRequestId String?       @unique
+  transferId        String?       @unique
+  storeId           String        // loja que despacha
+  modal             DispatchModal
+  status            DispatchStatus @default(PENDING)
+  driverId          String?
+  routeId           String?
+  // financeiro
+  estimatedCost     Float?   // custo previsto ao despachar
+  actualCost        Float?   // custo real após conclusão
+  // referências externas
+  lalamoveOrderId   String?
+  spokeRouteId      String?  // ID da rota no Spoke
+  partnerRef        String?  // referência de parceiro (99, etc.)
+  // controle
+  dispatchedById    String
+  notes             String?
+  dispatchedAt      DateTime?
+  completedAt       DateTime?
+  failedAt          DateTime?
+  failureReason     String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  deliveryRequest DeliveryRequest? @relation(fields: [deliveryRequestId], references: [id])
+  transfer        Transfer?        @relation("TransferDispatch", fields: [transferId], references: [id])
+  store           Store            @relation(fields: [storeId], references: [id])
+  driver          Driver?          @relation(fields: [driverId], references: [id])
+  route           Route?           @relation(fields: [routeId], references: [id])
+  dispatchedBy    User             @relation("DispatchedBy", fields: [dispatchedById], references: [id])
+  lalamoveOrder   LalamoveOrder?
+  audit           FreightAudit?
+
+  @@map("dispatches")
+}
+
+// ──────────────────────────────────────────────
+// MOTORISTAS
+// ──────────────────────────────────────────────
+
+model Driver {
+  id           String  @id @default(cuid())
+  name         String
+  phone        String
+  storeId      String
+  vehicleType  String? // moto, carro, van, caminhão
+  licensePlate String?
+  active       Boolean @default(true)
+  available    Boolean @default(true)  // disponível para nova rota?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  store      Store           @relation(fields: [storeId], references: [id])
+  dispatches Dispatch[]
+  locations  DriverLocation[]
+  routes     Route[]
+
+  @@map("drivers")
+}
+
+// ──────────────────────────────────────────────
+// LOCALIZAÇÃO DOS MOTORISTAS (rastreamento)
+// ──────────────────────────────────────────────
+
+model DriverLocation {
+  id        String  @id @default(cuid())
+  driverId  String
+  lat       Float
+  lng       Float
+  speed     Float?   // km/h
+  heading   Float?   // graus (0-360)
+  accuracy  Float?   // metros
+  source    String  @default("MANUAL") // MANUAL, APP, GPS_TRACKER
+  timestamp DateTime @default(now())
+
+  driver Driver @relation(fields: [driverId], references: [id])
+
+  @@index([driverId, timestamp])
+  @@map("driver_locations")
+}
+
+// ──────────────────────────────────────────────
+// ROTAS INTERNAS
+// ──────────────────────────────────────────────
+
+model Route {
+  id          String   @id @default(cuid())
+  name        String?
+  driverId    String
+  date        DateTime
+  status      String   @default("ACTIVE")  // ACTIVE, COMPLETED, CANCELLED
+  spokeRouteId String?  // ID no sistema Spoke para sincronização
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  driver     Driver     @relation(fields: [driverId], references: [id])
+  dispatches Dispatch[]
+
+  @@map("routes")
+}
+
+// ──────────────────────────────────────────────
+// INTEGRAÇÃO LALAMOVE
+// ──────────────────────────────────────────────
+
+model LalamoveOrder {
+  id              String  @id @default(cuid())
+  dispatchId      String  @unique
+  // IDs do Lalamove
+  lalamoveOrderId String  @unique
+  quotationId     String?
+  // status mapeado para interno
+  status          String  // PENDING, ASSIGNING_DRIVER, ON_GOING, PICKED_UP, COMPLETED, CANCELLED, REJECTED, EXPIRED
+  internalStatus  DispatchStatus
+  // dados do motorista do Lalamove
+  driverName      String?
+  driverPhone     String?
+  driverPlate     String?
+  driverPhoto     String?
+  shareLink       String?   // link de rastreamento público
+  // financeiro
+  estimatedPrice  Float?
+  finalPrice      Float?
+  currency        String  @default("BRL")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  dispatch Dispatch        @relation(fields: [dispatchId], references: [id])
+  events   LalamoveEvent[]
+
+  @@map("lalamove_orders")
+}
+
+// eventos recebidos via webhook do Lalamove
+model LalamoveEvent {
+  id                  String   @id @default(cuid())
+  lalamoveOrderId     String
+  externalOrderId     String   // ID da ordem no Lalamove
+  eventType           String   // ORDER_STATUS_UPDATED, DRIVER_ASSIGNED, etc.
+  rawPayload          Json     // payload bruto do webhook
+  processedAt         DateTime?
+  processingError     String?
+  createdAt           DateTime @default(now())
+
+  order LalamoveOrder @relation(fields: [lalamoveOrderId], references: [id])
+
+  @@map("lalamove_events")
+}
+
+// ──────────────────────────────────────────────
+// CONFIGURAÇÃO DE AUDITORIA
+// Política de tolerância separada do dado auditado.
+// storeId = null → configuração global.
+// Configuração específica por loja tem precedência.
+// ──────────────────────────────────────────────
+
+model AuditConfig {
+  id               String   @id @default(cuid())
+  storeId          String?  // null = configuração global
+  tolerancePercent Float    @default(15) // % de desvio permitido sem justificativa
+  description      String?
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  store Store? @relation(fields: [storeId], references: [id])
+
+  @@map("audit_configs")
+}
+
+// ──────────────────────────────────────────────
+// AUDITORIA DE FRETE
+// ──────────────────────────────────────────────
+
+model FreightAudit {
+  id                String        @id @default(cuid())
+  deliveryRequestId String?       @unique
+  dispatchId        String?       @unique
+  invoiceNumber     String?
+  storeId           String
+  // 4 valores para análise de desvios
+  suggestedFreight  Float?   // calculado pelo sistema
+  chargedFreight    Float?   // cobrado do cliente pelo vendedor
+  estimatedCost     Float?   // custo previsto ao despachar
+  actualCost        Float?   // custo real após conclusão
+  // modal usado
+  modal             DispatchModal?
+  deliveryType      DeliveryType?
+  distanceKm        Float?
+  // desvios calculados
+  freightDeviation  Float?   // chargedFreight - suggestedFreight
+  costDeviation     Float?   // actualCost - estimatedCost
+  // classificação e controle de desvio
+  deviationPercent        Float?                    // (chargedFreight - suggestedFreight) / suggestedFreight * 100
+  deviationClassification DeviationClassification?  // classificação automática
+  tolerancePercent        Float?                    // tolerância vigente no momento da criação
+  justificationRequired   Boolean @default(false)   // true = desvio exige justificativa
+  justification           String?                   // texto da justificativa
+  justifiedById           String?                   // quem justificou
+  justifiedAt             DateTime?                 // quando justificou
+  // contexto da rota
+  routeSource             RouteSource?              // fonte da distância (para % de fallback)
+  durationMinutes         Float?                    // duração da rota no momento da cotação
+  // para KPIs — desnormalizado para evitar joins
+  sellerId                String?                   // vendedor da solicitação
+  totalValue              Float?                    // valor total da NF (para % sobre faturamento)
+  // contexto
+  notes             String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  deliveryRequest DeliveryRequest? @relation(fields: [deliveryRequestId], references: [id])
+  dispatch        Dispatch?        @relation(fields: [dispatchId], references: [id])
+  justifiedBy     User?            @relation("AuditJustifiedBy", fields: [justifiedById], references: [id])
+  seller          User?            @relation("AuditSeller", fields: [sellerId], references: [id])
+
+  @@map("freight_audits")
+}
+
+// ──────────────────────────────────────────────
+// CACHE DE ROTAS (Google Maps Distance Matrix)
+// ──────────────────────────────────────────────
+
+model RouteCache {
+  id          String   @id @default(cuid())
+  // chave de lookup: coordenadas arredondadas a 4 casas (~11m) + período do dia
+  cacheKey    String   @unique // "{oLat4dp}_{oLng4dp}_{dLat4dp}_{dLng4dp}_{MORNING|AFTERNOON|EVENING}"
+  originLat   Float
+  originLng   Float
+  destLat     Float
+  destLng     Float
+  distanceKm  Float
+  durationMin Float    // duração em minutos
+  source      String   @default("GOOGLE_MAPS")
+  fetchedAt   DateTime @default(now())
+  expiresAt   DateTime // TTL dinâmico: ≤5km=7d · 5-15km=15d · >15km=30d
+
+  @@index([cacheKey])
+  @@map("route_cache")
+}
+
+// ──────────────────────────────────────────────
+// CONFIGURAÇÕES DO SISTEMA
+// ──────────────────────────────────────────────
+
+model SystemConfig {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String
+  type      String   @default("string") // string, number, boolean, json
+  label     String?
+  updatedAt DateTime @updatedAt
+
+  @@map("system_configs")
+}
