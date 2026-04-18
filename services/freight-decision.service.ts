@@ -101,3 +101,89 @@ export function scoreDriverForDelivery(
 
   return Math.round(originScore + destScore + dispatchScore);
 }
+
+// ──────────────────────────────────────────────
+// PASSO 7 — DECISÃO DE MODAL (6 regras de prioridade)
+// ──────────────────────────────────────────────
+
+export interface DecisionParams {
+  internalVehicle: InternalVehicleType | "EXCEPTION";
+  lalamoveVehicle: LalamoveServiceType | "EXCEPTION";
+  bestDriver: { id: string; name: string; score: number } | null;
+  internalCost: number;
+  lalamoveCost: number | null;
+  isUrgent:     boolean;
+}
+
+export interface ModalDecisionResult {
+  mode:                     "INTERNAL" | "LALAMOVE";
+  vehicle:                  InternalVehicleType | LalamoveServiceType;
+  driverId?:                string;
+  requiresManualAssignment: boolean;
+  reason:                   string;
+}
+
+export function decideBestDeliveryOption(p: DecisionParams): ModalDecisionResult {
+  const internalOk = p.internalVehicle !== "EXCEPTION" && p.bestDriver !== null;
+  const lalamoveOk = p.lalamoveVehicle !== "EXCEPTION" && p.lalamoveCost !== null;
+
+  // Regra 1: urgente + Lalamove disponível e não muito mais caro → Lalamove
+  if (p.isUrgent && lalamoveOk && p.lalamoveCost! < p.internalCost * 1.2) {
+    return {
+      mode: "LALAMOVE",
+      vehicle: p.lalamoveVehicle as LalamoveServiceType,
+      requiresManualAssignment: false,
+      reason: `Urgente — Lalamove (R$ ${p.lalamoveCost!.toFixed(2)}) preferido vs interno (R$ ${p.internalCost.toFixed(2)})`,
+    };
+  }
+
+  // Regra 2: motorista com score ≥ 60 e custo interno ≤ Lalamove → interno
+  if (internalOk && p.bestDriver!.score >= 60 && (!lalamoveOk || p.internalCost <= p.lalamoveCost!)) {
+    return {
+      mode: "INTERNAL",
+      vehicle: p.internalVehicle as InternalVehicleType,
+      driverId: p.bestDriver!.id,
+      requiresManualAssignment: false,
+      reason: `${p.bestDriver!.name} disponível (score ${p.bestDriver!.score}) — custo interno R$ ${p.internalCost.toFixed(2)}`,
+    };
+  }
+
+  // Regra 3: Lalamove mais barato
+  if (lalamoveOk && internalOk && p.lalamoveCost! < p.internalCost) {
+    return {
+      mode: "LALAMOVE",
+      vehicle: p.lalamoveVehicle as LalamoveServiceType,
+      requiresManualAssignment: false,
+      reason: `Lalamove (R$ ${p.lalamoveCost!.toFixed(2)}) mais econômico que rota interna (R$ ${p.internalCost.toFixed(2)})`,
+    };
+  }
+
+  // Regra 4: sem motorista → Lalamove
+  if (!internalOk && lalamoveOk) {
+    return {
+      mode: "LALAMOVE",
+      vehicle: p.lalamoveVehicle as LalamoveServiceType,
+      requiresManualAssignment: false,
+      reason: "Nenhum motorista disponível — usando Lalamove",
+    };
+  }
+
+  // Regra 5: Lalamove indisponível + motorista disponível → interno
+  if (internalOk && !lalamoveOk) {
+    return {
+      mode: "INTERNAL",
+      vehicle: p.internalVehicle as InternalVehicleType,
+      driverId: p.bestDriver!.id,
+      requiresManualAssignment: false,
+      reason: "Lalamove indisponível — usando rota interna",
+    };
+  }
+
+  // Regra 6: nada disponível → interno com atribuição manual
+  return {
+    mode: "INTERNAL",
+    vehicle: InternalVehicleType.FIORINO,
+    requiresManualAssignment: true,
+    reason: "Nenhum recurso disponível — requer atribuição manual pelo operador",
+  };
+}
