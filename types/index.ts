@@ -110,7 +110,7 @@ export interface FreightDecisionResult {
   lalamoveQuote?: {
     quotationId:    string
     estimatedPrice: number
-    serviceType:    string
+    serviceType:    LalamoveServiceType
   }
   distanceKm:      number
   durationMinutes: number

@@ -2,6 +2,8 @@
 // CONSTANTES DO SISTEMA
 // ──────────────────────────────────────────────
 
+import { InternalVehicleType, LalamoveServiceType } from "@/types"
+
 // códigos das lojas (para validação e seeds)
 export const STORE_CODES = ["067", "131", "132", "173", "191"] as const;
 export type StoreCode = (typeof STORE_CODES)[number];
@@ -86,7 +88,7 @@ export const LALAMOVE_API_BASE_URL = "https://rest.lalamove.com";
 export const LALAMOVE_SANDBOX_URL = "https://sandbox-rest.lalamove.com";
 
 // Motor de Decisão de Frete — mapeamento de nome interno → código API Lalamove
-export const LALAMOVE_VEHICLE_MAP: Record<string, string> = {
+export const LALAMOVE_VEHICLE_MAP: Record<keyof typeof LalamoveServiceType, string> = {
   LALAPRO:    "MOTORCYCLE",
   UTILITARIO: "VAN",
   VAN:        "VAN_L",
@@ -95,7 +97,7 @@ export const LALAMOVE_VEHICLE_MAP: Record<string, string> = {
 }
 
 // Margem por tipo de veículo interno: precoBase = MAX(zona, custo × margem)
-export const INTERNAL_VEHICLE_MARGINS: Record<string, number> = {
+export const INTERNAL_VEHICLE_MARGINS: Record<InternalVehicleType, number> = {
   MOTO:     1.8,
   FIORINO:  1.4,
   CAMINHAO: 1.3,
