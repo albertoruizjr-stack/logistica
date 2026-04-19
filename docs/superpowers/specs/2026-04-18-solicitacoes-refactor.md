@@ -92,7 +92,9 @@ const rows: SolicitacaoRow[] = requests.map((req) => ({
   />
 
   <div className="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
-    <SolicitacoesFilters role={session.role} stores={stores} />
+    <Suspense fallback={<div className="h-12 bg-slate-50 border-b border-slate-200 animate-pulse" />}>
+      <SolicitacoesFilters role={session.role} stores={stores} />
+    </Suspense>
     <SolicitacoesTable data={rows} />
   </div>
 </div>
@@ -338,6 +340,7 @@ onRowClick={(row) => router.push(`/solicitacoes/${row.id}`)}
 ### page.tsx
 
 ```typescript
+import { Suspense } from "react";
 import { PageHeader } from "@/components/ui";
 import SolicitacoesFilters from "./_components/solicitacoes-filters";
 import SolicitacoesTable from "./_components/solicitacoes-table";
