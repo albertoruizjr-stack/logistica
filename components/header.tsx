@@ -33,7 +33,7 @@ export function Header({ userRole, userName, storeName, storeCode }: HeaderProps
       <span className="text-lg font-semibold text-slate-900">{title}</span>
       <div className="flex items-center gap-3">
         <span className="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded-md font-medium">
-          {storeCode} — {storeName}
+          {storeCode ? `${storeCode} — ${storeName}` : storeName}
         </span>
         {CAN_CREATE_DELIVERY.includes(userRole) && (
           <Link
