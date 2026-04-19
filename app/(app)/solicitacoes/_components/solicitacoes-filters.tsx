@@ -46,6 +46,7 @@ export default function SolicitacoesFilters({
       options: [
         { value: "", label: "Todos os status" },
         { value: "PENDING", label: "Pendente" },
+        { value: "AWAITING_ITEMS", label: "Separando Itens" },
         { value: "AWAITING_TRANSFER", label: "Aguard. Transferência" },
         { value: "READY", label: "Pronto para Despacho" },
         { value: "DISPATCHED", label: "Despachado" },
