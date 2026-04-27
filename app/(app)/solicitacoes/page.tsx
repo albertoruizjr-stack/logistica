@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { DeliveryRequestStatus } from "@prisma/client";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { PageHeader } from "@/components/ui";
@@ -22,17 +23,24 @@ export default async function SolicitacoesPage({
       ? session.storeId
       : searchParams.storeId ?? undefined;
 
+  const validatedStatus =
+    searchParams.status &&
+    Object.values(DeliveryRequestStatus).includes(
+      searchParams.status as DeliveryRequestStatus
+    )
+      ? (searchParams.status as DeliveryRequestStatus)
+      : undefined;
+
   const requests = await prisma.deliveryRequest.findMany({
     where: {
-      ...(searchParams.status ? { status: searchParams.status as never } : {}),
+      ...(validatedStatus ? { status: validatedStatus } : {}),
       ...(storeFilter ? { storeId: storeFilter } : {}),
     },
     include: {
-      store: { select: { code: true, name: true } },
+      store: { select: { code: true } },
       seller: { select: { name: true } },
-      freightQuote: { select: { distanceKm: true, suggestedPrice: true } },
-      transfers: { select: { id: true, status: true, priority: true } },
-      dispatch: { select: { modal: true, status: true } },
+      freightQuote: { select: { suggestedPrice: true } },
+      transfers: { select: { status: true } },
       _count: { select: { items: true } },
     },
     orderBy: { createdAt: "desc" },

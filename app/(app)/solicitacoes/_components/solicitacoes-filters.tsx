@@ -52,6 +52,7 @@ export default function SolicitacoesFilters({
         { value: "DISPATCHED", label: "Despachado" },
         { value: "IN_TRANSIT", label: "Em trânsito" },
         { value: "DELIVERED", label: "Entregue" },
+        { value: "CANCELLED", label: "Cancelado" },
       ],
     },
     ...(role !== "SELLER"
