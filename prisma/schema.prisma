@@ -7,8 +7,8 @@ generator client {
 
 datasource db {
   provider  = "postgresql"
-  url       = env("DATABASE_URL")        // pooler (app) — porta 6543 no Supabase
-  directUrl = env("DIRECT_URL")          // conexão direta — porta 5432 — usado pelo prisma migrate
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 // ──────────────────────────────────────────────
@@ -80,6 +80,24 @@ enum RouteSource {
   HAVERSINE    // fallback — linha reta (isApproximate = true)
 }
 
+enum StockLedgerEntryType {
+  SYNC_ERP        // sincronização do ERP (atualiza qtdFisica)
+  COMMIT          // estoque comprometido ao criar transferência de saída
+  RELEASE         // commit desfeito ao cancelar transferência
+  TRANSIT_IN      // transferência de entrada aprovada (incrementa qtdEmTransito no destino)
+  TRANSIT_CANCEL  // transferência de entrada cancelada (reverte qtdEmTransito)
+  RECONCILE_SEND  // baixa física ao confirmar envio (PREPARING → IN_TRANSIT)
+  RECONCILE_RECV  // entrada física ao receber (IN_TRANSIT → RECEIVED)
+  DIVERGENCE_ADJ  // ajuste manual após resolução de divergência
+  MANUAL          // ajuste manual com justificativa do operador
+}
+
+enum DivergenceStatus {
+  PENDING   // registrada, aguardando resolução do operador
+  RESOLVED  // resolvida — estoque ajustado e justificado
+  VOIDED    // anulada (erro de registro)
+}
+
 // ──────────────────────────────────────────────
 // LOJAS
 // ──────────────────────────────────────────────
@@ -106,6 +124,7 @@ model Store {
   dispatches        Dispatch[]
   drivers           Driver[]
   auditConfigs      AuditConfig[]
+  stockLedgers      StockLedger[]
 
   @@map("stores")
 }
@@ -131,8 +150,9 @@ model User {
   dispatches        Dispatch[]        @relation("DispatchedBy")
   transfersRequested Transfer[]       @relation("TransferRequestedBy")
   transfersApproved  Transfer[]       @relation("TransferApprovedBy")
-  auditJustifications FreightAudit[] @relation("AuditJustifiedBy")
-  auditSales          FreightAudit[] @relation("AuditSeller")
+  auditJustifications  FreightAudit[]       @relation("AuditJustifiedBy")
+  auditSales           FreightAudit[]       @relation("AuditSeller")
+  divergencesResolved  TransferDivergence[] @relation("DivergenceResolvedBy")
 
   @@map("users")
 }
@@ -282,15 +302,19 @@ model Transfer {
   notes             String?
   internalNotes     String?  // notas do operador, não visíveis ao vendedor
   estimatedArrival  DateTime?
+  // controle de divergência no recebimento
+  hasDivergence     Boolean  @default(false)
+  divergenceCount   Int      @default(0)
 
-  deliveryRequest DeliveryRequest? @relation(fields: [deliveryRequestId], references: [id])
-  fromStore       Store            @relation("TransferFrom", fields: [fromStoreId], references: [id])
-  toStore         Store            @relation("TransferTo", fields: [toStoreId], references: [id])
-  requestedBy     User?            @relation("TransferRequestedBy", fields: [requestedById], references: [id])
-  approvedBy      User?            @relation("TransferApprovedBy", fields: [approvedById], references: [id])
+  deliveryRequest DeliveryRequest?    @relation(fields: [deliveryRequestId], references: [id])
+  fromStore       Store               @relation("TransferFrom", fields: [fromStoreId], references: [id])
+  toStore         Store               @relation("TransferTo", fields: [toStoreId], references: [id])
+  requestedBy     User?               @relation("TransferRequestedBy", fields: [requestedById], references: [id])
+  approvedBy      User?               @relation("TransferApprovedBy", fields: [approvedById], references: [id])
   items           TransferItem[]
-  dispatch        Dispatch?        @relation("TransferDispatch")
+  dispatch        Dispatch?           @relation("TransferDispatch")
   history         TransferHistory[]
+  divergences     TransferDivergence[]
 
   @@map("transfers")
 }
@@ -326,7 +350,8 @@ model TransferItem {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  transfer Transfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  transfer    Transfer             @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  divergences TransferDivergence[]
 
   @@map("transfer_items")
 }
@@ -592,6 +617,101 @@ model SystemConfig {
   updatedAt DateTime @updatedAt
 
   @@map("system_configs")
+}
+
+// ──────────────────────────────────────────────
+// RAZÃO DE ESTOQUE (STOCK LEDGER)
+//
+// Uma linha por (loja, produto). Mantém três contadores:
+//   qtdFisica       — o que o ERP diz que tem (fonte: sync_estoque)
+//   qtdComprometida — reservado para saídas aprovadas ainda não despachadas
+//   qtdEmTransito   — a caminho desta loja, ainda não chegou
+//
+// qtdDisponivel = qtdFisica - qtdComprometida (calculado na aplicação)
+//
+// O ERP é fonte de verdade para qtdFisica.
+// O sistema_logistica é fonte de verdade para qtdComprometida e qtdEmTransito.
+// ──────────────────────────────────────────────
+
+model StockLedger {
+  id              String    @id @default(cuid())
+  storeId         String
+  productCode     String
+  productName     String
+  qtdFisica       Float     @default(0)
+  qtdComprometida Float     @default(0)
+  qtdEmTransito   Float     @default(0)
+  version         Int       @default(0)  // controle de concorrência otimista
+  syncedAt        DateTime?              // última sincronização do ERP
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  store       Store              @relation(fields: [storeId], references: [id])
+  entries     StockLedgerEntry[]
+  divergences TransferDivergence[]
+
+  @@unique([storeId, productCode])
+  @@index([storeId])
+  @@index([productCode])
+  @@map("stock_ledgers")
+}
+
+// ──────────────────────────────────────────────
+// ENTRADAS DO RAZÃO (AUDIT LOG)
+// Registra cada evento que alterou qualquer contador
+// do StockLedger. Responde "por que está assim?"
+// ──────────────────────────────────────────────
+
+model StockLedgerEntry {
+  id            String               @id @default(cuid())
+  ledgerId      String
+  type          StockLedgerEntryType
+  qty           Float                // positivo = incremento, negativo = decremento
+  field         String               // "qtdFisica" | "qtdComprometida" | "qtdEmTransito"
+  referenceId   String?              // ID da transferência ou despacho que gerou o evento
+  referenceType String?              // "transfer" | "dispatch" | "manual"
+  notes         String?
+  createdById   String?
+  createdAt     DateTime             @default(now())
+
+  ledger StockLedger @relation(fields: [ledgerId], references: [id])
+
+  @@index([ledgerId, createdAt])
+  @@index([referenceId])
+  @@map("stock_ledger_entries")
+}
+
+// ──────────────────────────────────────────────
+// DIVERGÊNCIA DE TRANSFERÊNCIA
+//
+// Criada quando sentQty != receivedQty no recebimento.
+// Bloqueia o avanço automático da solicitação para READY
+// até que um operador resolva e justifique.
+// ──────────────────────────────────────────────
+
+model TransferDivergence {
+  id             String           @id @default(cuid())
+  transferId     String
+  transferItemId String
+  ledgerId       String           // ledger da loja destino (onde o estoque chega)
+  productCode    String
+  productName    String
+  sentQty        Float
+  receivedQty    Float
+  divergenceQty  Float            // sentQty - receivedQty (positivo = faltou, negativo = sobrou)
+  status         DivergenceStatus @default(PENDING)
+  resolution     String?          // descrição da resolução pelo operador
+  resolvedById   String?
+  resolvedAt     DateTime?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  transfer     Transfer     @relation(fields: [transferId], references: [id])
+  transferItem TransferItem @relation(fields: [transferItemId], references: [id])
+  ledger       StockLedger  @relation(fields: [ledgerId], references: [id])
+  resolvedBy   User?        @relation("DivergenceResolvedBy", fields: [resolvedById], references: [id])
+
+  @@map("transfer_divergences")
 }
 
 // ──────────────────────────────────────────────
