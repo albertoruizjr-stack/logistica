@@ -104,7 +104,8 @@ enum DivergenceStatus {
 
 model Store {
   id          String  @id @default(cuid())
-  code        String  @unique  // 067, 131, 132, 173, 191
+  code               String  @unique  // 067, 131, 132, 173, 191
+  codigoEmpresaCitel String?          // código da empresa no Citel/Autcom (ex: "1", "2")
   name        String
   address     String
   city        String  @default("São Paulo")
