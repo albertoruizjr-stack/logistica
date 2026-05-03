@@ -204,6 +204,8 @@ Recalculada a cada sync (uma venda `NORMAL` pode virar `CRITICAL` sem ação do 
 | `notifiedUserIds` | String[] | Notificados além do owner |
 | `actionType` | `AlertActionType` | Ver enum abaixo |
 | `slaDeadline` | DateTime | |
+| `slaStatus` | `ON_TRACK \| AT_RISK \| OVERDUE` | Calculado: ON_TRACK = >50% do SLA restante · AT_RISK = <50% · OVERDUE = vencido |
+| `timeRemaining` | Int? | Minutos restantes até o SLA (negativo se vencido). Campo calculado — não persiste no banco, computado na query. |
 | `status` | `PENDING \| IN_PROGRESS \| RESOLVED \| CANCELLED \| SNOOZED \| NEEDS_MANUAL_CONFIRMATION \| CRITICAL_UNRESOLVED` | |
 | `escalationLevel` | `L1 \| L2 \| L3 \| null` | |
 | `escalatedAt` | DateTime? | |
@@ -213,7 +215,9 @@ Recalculada a cada sync (uma venda `NORMAL` pode virar `CRITICAL` sem ação do 
 | `suppressedAt` | DateTime? | |
 | `resolvedById` | String? | |
 | `resolvedAt` | DateTime? | |
-| `resolution` | String? | |
+| `resolutionType` | `TRANSFER \| PURCHASE \| MANUAL_FIX \| CANCELLED \| null` | Obrigatório ao resolver: como o alerta foi fechado |
+| `resolutionNotes` | String? | Texto livre do operador explicando a resolução |
+| `resolution` | String? | Campo legado — manter para compatibilidade com Pilar 1 |
 | `revalidatedAt` | DateTime? | |
 | `revalidationResult` | `CONFIRMED \| CANCELLED \| ERROR \| null` | |
 | `dataConfidence` | `HIGH \| MEDIUM \| LOW` | Herdado do sync job |
@@ -472,7 +476,7 @@ Os owners nas regras são papéis, não IDs fixos. O Alert Engine resolve o `own
 - "Líder loja X" → `User` com `role = OPERATOR` vinculado à `storeId` do alerta
 - "Alberto" → `User` com `role = ADMIN`
 
-Se o owner não for encontrado, o alerta é criado com `ownerId = null` e badge "sem responsável definido" no dashboard.
+Se o owner resolvido por papel não for encontrado, o alerta é atribuído automaticamente a Alberto (`role = ADMIN`). Nunca `ownerId = null` — sempre há um responsável.
 
 **Vínculo central entre entidades:**
 
