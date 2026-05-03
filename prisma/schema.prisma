@@ -303,6 +303,10 @@ model Transfer {
   notes             String?
   internalNotes     String?  // notas do operador, não visíveis ao vendedor
   estimatedArrival  DateTime?
+  // NF emitida no Citel — quando preenchida, o Citel passa a controlar a reserva.
+  // citelTakesOver() só roda quando este campo é definido pela primeira vez.
+  nfCitelNumero     String?
+  nfCitelEmitidaAt  DateTime?
   // controle de divergência no recebimento
   hasDivergence     Boolean  @default(false)
   divergenceCount   Int      @default(0)

@@ -244,6 +244,9 @@ export interface UpdateTransferStatusInput {
   estimatedArrival?: Date;
   sentItems?: { transferItemId: string; sentQty: number }[];
   receivedItems?: { transferItemId: string; receivedQty: number }[];
+  // NF emitida no Citel — OBRIGATÓRIO para acionar citelTakesOver().
+  // Sem este campo, qtdComprometida NÃO é liberada mesmo em PREPARING/IN_TRANSIT.
+  nfCitelNumero?: string;
 }
 
 export interface CreateDispatchInput {
