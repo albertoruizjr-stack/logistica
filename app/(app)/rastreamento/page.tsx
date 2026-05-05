@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { DispatchStatus } from "@prisma/client";
 import { MapPin } from "lucide-react";
 import { DriverCards, type DriverCardData } from "@/components/rastreamento/driver-cards";
+import { PageHeader } from "@/components/ui";
 
 export const dynamic = "force-dynamic"; // sempre busca dados frescos
 
@@ -101,26 +102,23 @@ export default async function RastreamentoPage() {
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
-      {/* Header */}
-      <div className="flex items-start justify-between mb-6">
-        <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-bold text-gray-900">Rastreamento</h1>
+      <PageHeader
+        title="Rastreamento"
+        description={`${driverData.length} motorista${driverData.length !== 1 ? "s" : ""} cadastrado${driverData.length !== 1 ? "s" : ""} · atualiza automaticamente a cada 30s`}
+        actions={
+          <>
             {totalActive > 0 && (
               <span className="bg-orange-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
                 {totalActive} em rota
               </span>
             )}
-          </div>
-          <p className="text-sm text-gray-500 mt-1">
-            {driverData.length} motorista{driverData.length !== 1 ? "s" : ""} cadastrado{driverData.length !== 1 ? "s" : ""} · atualiza automaticamente a cada 30s
-          </p>
-        </div>
-        <div className="flex items-center gap-1.5 text-xs text-gray-400 bg-white border border-gray-200 rounded-lg px-3 py-2">
-          <MapPin className="w-3.5 h-3.5 text-orange-400" />
-          Localização via APP ou GPS
-        </div>
-      </div>
+            <div className="flex items-center gap-1.5 text-xs text-gray-400 bg-white border border-gray-200 rounded-lg px-3 py-2">
+              <MapPin className="w-3.5 h-3.5 text-orange-400" />
+              Localização via APP ou GPS
+            </div>
+          </>
+        }
+      />
 
       <DriverCards initialDrivers={driverData} />
     </div>

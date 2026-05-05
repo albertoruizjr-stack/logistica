@@ -30,6 +30,13 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
 
     const status = await getLalamoveOrderStatus(lalamoveOrder.lalamoveOrderId);
 
+    if ("reason" in status) {
+      return NextResponse.json(
+        apiError("Integração Lalamove não configurada neste ambiente", "LALAMOVE_NOT_CONFIGURED"),
+        { status: 503 }
+      );
+    }
+
     // atualiza o banco se o status mudou
     if (status.status !== lalamoveOrder.status) {
       await prisma.lalamoveOrder.update({
@@ -83,7 +90,14 @@ export async function DELETE(req: NextRequest, { params }: RouteParams) {
       return NextResponse.json(apiError("Pedido Lalamove não encontrado"), { status: 404 });
     }
 
-    await cancelLalamoveOrder(lalamoveOrder.lalamoveOrderId);
+    const cancelResult = await cancelLalamoveOrder(lalamoveOrder.lalamoveOrderId);
+
+    if (cancelResult && "reason" in cancelResult) {
+      return NextResponse.json(
+        apiError("Integração Lalamove não configurada neste ambiente", "LALAMOVE_NOT_CONFIGURED"),
+        { status: 503 }
+      );
+    }
 
     // atualiza status interno em paralelo
     await Promise.all([

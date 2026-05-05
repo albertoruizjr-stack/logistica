@@ -1,22 +1,69 @@
 // ──────────────────────────────────────────────
-// SERVIÇO DE TRANSFERÊNCIAS
-// Transferência é a entidade central do domínio logístico.
-// Este serviço centraliza toda a lógica de criação,
-// progressão de status e sugestão de lojas.
+// SERVIÇO DE TRANSFERÊNCIAS — Pilar 1: Estoque Comprometido
+//
+// Integra o StockLedger em cada transição de status:
+//   createTransfer       → commitStock() por item
+//   → APPROVED           → markInTransit() no destino
+//   → IN_TRANSIT         → citelTakesOver() (exige nfCitelNumero)
+//   → CANCELLED          → releaseStock() e/ou cancelTransit()
+//   → RECEIVED           → reconcileTransfer() + divergências
 // ──────────────────────────────────────────────
 
 import { prisma } from "@/lib/prisma";
 import { TransferStatus, TransferPriority } from "@prisma/client";
-import type { CreateTransferInput, UpdateTransferStatusInput, TransferWithRelations } from "@/types";
+import type { CreateTransferInput, UpdateTransferStatusInput } from "@/types";
 import { fetchStockByProduct } from "./erp.service";
+import {
+  preCheckStock,
+  commitStock,
+  releaseStock,
+  citelTakesOver,
+  markInTransit,
+  cancelTransit,
+  reconcileTransfer,
+} from "./stock-ledger.service";
 
 // ──────────────────────────────────────────────
 // CRIAÇÃO DE TRANSFERÊNCIA
 // ──────────────────────────────────────────────
 
 export async function createTransfer(input: CreateTransferInput) {
-  return prisma.$transaction(async (tx) => {
-    const transfer = await tx.transfer.create({
+  // Passo 1: pré-valida estoque de todos os itens antes de persistir qualquer dado
+  // Se qualquer item falhar, nenhuma transferência é criada
+  const checkErrors: { productCode: string; productName: string; error: string; detail?: string }[] = [];
+
+  for (const item of input.items) {
+    const check = await preCheckStock({
+      storeId: input.fromStoreId,
+      productCode: item.productCode,
+      productName: item.productName,
+      qty: item.quantity,
+    });
+
+    if (!check.ok) {
+      const reason =
+        check.error === "CITEL_UNAVAILABLE"
+          ? "estoque insuficiente (Citel indisponível, usando dados locais)"
+          : "estoque insuficiente";
+
+      const detail = check.detail
+        ? `disponível: ${check.detail.saldoDisponivelReal}, solicitado: ${check.detail.qtdSolicitada}`
+        : undefined;
+
+      checkErrors.push({ productCode: item.productCode, productName: item.productName, error: reason, detail });
+    }
+  }
+
+  if (checkErrors.length > 0) {
+    const lines = checkErrors.map((e) =>
+      e.detail ? `${e.productName} (${e.productCode}): ${e.error} — ${e.detail}` : `${e.productName} (${e.productCode}): ${e.error}`
+    );
+    throw new Error(`Estoque insuficiente para criar a transferência:\n${lines.join("\n")}`);
+  }
+
+  // Passo 2: persiste transferência e histórico
+  const transfer = await prisma.$transaction(async (tx) => {
+    const t = await tx.transfer.create({
       data: {
         deliveryRequestId: input.deliveryRequestId,
         fromStoreId: input.fromStoreId,
@@ -33,24 +80,18 @@ export async function createTransfer(input: CreateTransferInput) {
           })),
         },
       },
-      include: {
-        fromStore: true,
-        toStore: true,
-        items: true,
-      },
+      include: { fromStore: true, toStore: true, items: true },
     });
 
-    // registra no histórico
     await tx.transferHistory.create({
       data: {
-        transferId: transfer.id,
+        transferId: t.id,
         toStatus: TransferStatus.PENDING,
         changedById: input.requestedById,
         notes: "Transferência criada",
       },
     });
 
-    // se vinculada a uma solicitação, atualiza o status dela
     if (input.deliveryRequestId) {
       await tx.deliveryRequest.update({
         where: { id: input.deliveryRequestId },
@@ -58,8 +99,54 @@ export async function createTransfer(input: CreateTransferInput) {
       });
     }
 
-    return transfer;
+    return t;
   });
+
+  // Passo 3: trava estoque no ledger (commitStock tem a própria transação)
+  // Falha por CONCURRENT_CONFLICT é rara e ainda pode ocorrer aqui (TOCTOU residual)
+  const commitErrors: { productCode: string; productName: string; error: string }[] = [];
+
+  for (const item of transfer.items) {
+    const result = await commitStock({
+      storeId: input.fromStoreId,
+      productCode: item.productCode,
+      productName: item.productName,
+      qty: item.quantity,
+      transferId: transfer.id,
+      operatorId: input.requestedById,
+    });
+
+    if (!result.success) {
+      commitErrors.push({
+        productCode: item.productCode,
+        productName: item.productName,
+        error: result.error === "CONCURRENT_CONFLICT"
+          ? "conflito de concorrência — tente novamente"
+          : "estoque insuficiente",
+      });
+    }
+  }
+
+  // Se o commit falhou (caso raro de concorrência após pré-check), cancela e informa
+  if (commitErrors.length > 0) {
+    await prisma.transfer.update({
+      where: { id: transfer.id },
+      data: { status: TransferStatus.CANCELLED, cancelledAt: new Date() },
+    });
+    await prisma.transferHistory.create({
+      data: {
+        transferId: transfer.id,
+        fromStatus: TransferStatus.PENDING,
+        toStatus: TransferStatus.CANCELLED,
+        notes: `Cancelado — conflito de concorrência: ${commitErrors.map((e) => e.productCode).join(", ")}`,
+      },
+    });
+    throw new Error(
+      `Transferência cancelada por conflito de concorrência — tente novamente`
+    );
+  }
+
+  return transfer;
 }
 
 // ──────────────────────────────────────────────
@@ -70,35 +157,41 @@ export async function updateTransferStatus(
   transferId: string,
   input: UpdateTransferStatusInput
 ) {
-  return prisma.$transaction(async (tx) => {
-    const current = await tx.transfer.findUniqueOrThrow({
-      where: { id: transferId },
-      include: { items: true, deliveryRequest: true },
-    });
+  // Validação antecipada: IN_TRANSIT exige nfCitelNumero
+  if (input.status === TransferStatus.IN_TRANSIT && !input.nfCitelNumero) {
+    throw new Error(
+      "Informe o número da NF emitida no Citel para colocar a transferência em trânsito."
+    );
+  }
 
-    validateStatusTransition(current.status, input.status);
+  const current = await prisma.transfer.findUniqueOrThrow({
+    where: { id: transferId },
+    include: { items: true, deliveryRequest: true },
+  });
 
-    const now = new Date();
-    const statusDates: Record<string, Date | undefined> = {
-      [TransferStatus.APPROVED]: input.status === TransferStatus.APPROVED ? now : undefined,
-      [TransferStatus.PREPARING]: input.status === TransferStatus.PREPARING ? now : undefined,
-      [TransferStatus.IN_TRANSIT]: input.status === TransferStatus.IN_TRANSIT ? now : undefined,
-      [TransferStatus.RECEIVED]: input.status === TransferStatus.RECEIVED ? now : undefined,
-      [TransferStatus.CANCELLED]: input.status === TransferStatus.CANCELLED ? now : undefined,
-    };
+  validateStatusTransition(current.status, input.status);
 
-    const updated = await tx.transfer.update({
+  const now = new Date();
+  const isNewNf =
+    input.status === TransferStatus.IN_TRANSIT &&
+    !!input.nfCitelNumero &&
+    !current.nfCitelNumero;
+
+  // Atualiza status e campos relacionados na mesma transação
+  const updated = await prisma.$transaction(async (tx) => {
+    const result = await tx.transfer.update({
       where: { id: transferId },
       data: {
         status: input.status,
-        approvedById: input.status === TransferStatus.APPROVED ? input.changedById : undefined,
-        approvedAt: statusDates[TransferStatus.APPROVED],
-        preparingAt: statusDates[TransferStatus.PREPARING],
-        dispatchedAt: statusDates[TransferStatus.IN_TRANSIT],
-        receivedAt: statusDates[TransferStatus.RECEIVED],
-        cancelledAt: statusDates[TransferStatus.CANCELLED],
+        approvedById:   input.status === TransferStatus.APPROVED   ? input.changedById : undefined,
+        approvedAt:     input.status === TransferStatus.APPROVED   ? now : undefined,
+        preparingAt:    input.status === TransferStatus.PREPARING  ? now : undefined,
+        dispatchedAt:   input.status === TransferStatus.IN_TRANSIT ? now : undefined,
+        receivedAt:     input.status === TransferStatus.RECEIVED   ? now : undefined,
+        cancelledAt:    input.status === TransferStatus.CANCELLED  ? now : undefined,
         estimatedArrival: input.estimatedArrival,
-        // atualiza quantidades enviadas se fornecidas
+        nfCitelNumero:    input.nfCitelNumero ?? undefined,
+        nfCitelEmitidaAt: isNewNf ? now : undefined,
         items: input.sentItems
           ? {
               updateMany: input.sentItems.map((si) => ({
@@ -111,7 +204,6 @@ export async function updateTransferStatus(
       include: { items: true, deliveryRequest: true },
     });
 
-    // atualiza quantidades recebidas
     if (input.receivedItems) {
       for (const ri of input.receivedItems) {
         await tx.transferItem.update({
@@ -121,7 +213,6 @@ export async function updateTransferStatus(
       }
     }
 
-    // registra no histórico
     await tx.transferHistory.create({
       data: {
         transferId,
@@ -132,29 +223,131 @@ export async function updateTransferStatus(
       },
     });
 
-    // quando recebida, verifica se a solicitação vinculada pode avançar para READY
-    if (input.status === TransferStatus.RECEIVED && current.deliveryRequestId) {
-      await checkAndAdvanceDeliveryRequest(tx, current.deliveryRequestId);
+    return result;
+  });
+
+  // ── Operações de ledger pós-commit ─────────────────────────────────────
+
+  // APPROVED → registra qtdEmTransito na loja destino
+  if (input.status === TransferStatus.APPROVED) {
+    for (const item of current.items) {
+      await markInTransit({
+        toStoreId: current.toStoreId,
+        productCode: item.productCode,
+        productName: item.productName,
+        qty: item.quantity,
+        transferId,
+      });
+    }
+  }
+
+  // IN_TRANSIT com nova NF → Citel passa a controlar; libera qtdComprometida
+  if (isNewNf) {
+    for (const item of current.items) {
+      await citelTakesOver({
+        storeId: current.fromStoreId,
+        productCode: item.productCode,
+        qty: item.quantity,
+        transferId,
+        operatorId: input.changedById,
+      });
+    }
+  }
+
+  // CANCELLED → libera estoque e/ou cancela trânsito conforme o estado anterior
+  if (input.status === TransferStatus.CANCELLED) {
+    const hadNf = !!current.nfCitelNumero;
+
+    // Citel ainda não controla → qtdComprometida está no ledger → libera
+    if (!hadNf) {
+      for (const item of current.items) {
+        await releaseStock({
+          storeId: current.fromStoreId,
+          productCode: item.productCode,
+          qty: item.quantity,
+          transferId,
+          operatorId: input.changedById,
+        });
+      }
     }
 
-    return updated;
-  });
+    // markInTransit foi chamado em APPROVED → precisa cancelar qtdEmTransito no destino
+    const hadTransit = (
+      [TransferStatus.APPROVED, TransferStatus.PREPARING, TransferStatus.IN_TRANSIT] as TransferStatus[]
+    ).includes(current.status);
+
+    if (hadTransit) {
+      for (const item of current.items) {
+        await cancelTransit({
+          toStoreId: current.toStoreId,
+          productCode: item.productCode,
+          qty: item.quantity,
+          transferId,
+          operatorId: input.changedById,
+        });
+      }
+    }
+  }
+
+  // RECEIVED → reconcilia itens e detecta divergências
+  if (input.status === TransferStatus.RECEIVED && input.receivedItems) {
+    const itemMap = new Map(current.items.map((i) => [i.id, i]));
+
+    const reconcileItems = input.receivedItems
+      .flatMap((ri) => {
+        const item = itemMap.get(ri.transferItemId);
+        if (!item) return [];
+        return [{
+          transferItemId: ri.transferItemId,
+          productCode: item.productCode,
+          productName: item.productName,
+          sentQty: item.sentQty ?? item.quantity,
+          receivedQty: ri.receivedQty,
+        }];
+      });
+
+    if (reconcileItems.length > 0) {
+      const { hasDivergence, divergences } = await reconcileTransfer({
+        transferId,
+        sendingStoreId:   current.fromStoreId,
+        receivingStoreId: current.toStoreId,
+        operatorId: input.changedById,
+        items: reconcileItems,
+      });
+
+      if (hasDivergence) {
+        await prisma.transfer.update({
+          where: { id: transferId },
+          data: { hasDivergence: true, divergenceCount: divergences.length },
+        });
+      }
+    }
+  }
+
+  // Verifica se a solicitação vinculada pode avançar para READY
+  if (input.status === TransferStatus.RECEIVED && current.deliveryRequestId) {
+    await checkAndAdvanceDeliveryRequest(current.deliveryRequestId);
+  }
+
+  return updated;
 }
 
-// verifica se todas as transferências de uma solicitação foram recebidas
-// e se sim, marca a solicitação como READY
-async function checkAndAdvanceDeliveryRequest(
-  tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
-  deliveryRequestId: string
-) {
-  const transfers = await tx.transfer.findMany({
+// ──────────────────────────────────────────────
+// HELPERS INTERNOS
+// ──────────────────────────────────────────────
+
+// Avança para READY somente se todas as transferências foram recebidas sem divergências
+async function checkAndAdvanceDeliveryRequest(deliveryRequestId: string) {
+  const transfers = await prisma.transfer.findMany({
     where: { deliveryRequestId },
   });
 
-  const allReceived = transfers.every((t) => t.status === TransferStatus.RECEIVED);
+  const allClear = transfers.every(
+    (t) => t.status === TransferStatus.RECEIVED && !t.hasDivergence
+  );
 
-  if (allReceived) {
-    await tx.deliveryRequest.update({
+  if (allClear) {
+    await prisma.deliveryRequest.update({
       where: { id: deliveryRequestId },
       data: { status: "READY", isComplete: true },
     });
@@ -163,8 +356,6 @@ async function checkAndAdvanceDeliveryRequest(
 
 // ──────────────────────────────────────────────
 // SUGESTÃO DE LOJA PARA TRANSFERÊNCIA
-// Analisa estoque via ERP e recomenda a loja com
-// maior disponibilidade e menor desvio logístico
 // ──────────────────────────────────────────────
 
 export async function suggestTransferSource(
@@ -192,30 +383,27 @@ export async function suggestTransferSource(
 
   const candidates = stock.availability
     .filter((a) => a.available && a.qty >= requestedQty)
-    .map((a) => {
+    .flatMap((a) => {
       const store = storeMap.get(a.storeCode);
-      if (!store) return null;
+      if (!store) return [];
 
       // distância em linha reta como proxy de desvio logístico
-      const distanceKm = Math.sqrt(
-        Math.pow(store.lat - toStoreLat, 2) + Math.pow(store.lng - toStoreLng, 2)
-      ) * 111; // aprox km por grau
+      const distanceKm =
+        Math.sqrt(
+          Math.pow(store.lat - toStoreLat, 2) +
+          Math.pow(store.lng - toStoreLng, 2)
+        ) * 111;
 
-      // score = estoque disponível / distância (maior é melhor)
-      const score = a.qty / (distanceKm + 0.1);
-
-      return {
+      return [{
         storeId: store.id,
         storeCode: store.code,
         storeName: store.name,
         availableQty: a.qty,
         distanceKm,
-        score,
-      };
-    })
-    .filter(Boolean) as NonNullable<ReturnType<typeof suggestTransferSource> extends Promise<infer T> ? T : never>[];
+        score: a.qty / (distanceKm + 0.1),
+      }];
+    });
 
-  // retorna o candidato com maior score
   return candidates.sort((a, b) => b.score - a.score)[0] ?? null;
 }
 
@@ -238,9 +426,9 @@ export async function listTransfers(filters: {
         ? { status: { in: filters.status } }
         : { status: filters.status }
       : {}),
-    ...(filters.priority ? { priority: filters.priority } : {}),
-    ...(filters.fromStoreId ? { fromStoreId: filters.fromStoreId } : {}),
-    ...(filters.toStoreId ? { toStoreId: filters.toStoreId } : {}),
+    ...(filters.priority         ? { priority: filters.priority }                 : {}),
+    ...(filters.fromStoreId      ? { fromStoreId: filters.fromStoreId }           : {}),
+    ...(filters.toStoreId        ? { toStoreId: filters.toStoreId }               : {}),
     ...(filters.deliveryRequestId ? { deliveryRequestId: filters.deliveryRequestId } : {}),
   };
 
@@ -251,19 +439,17 @@ export async function listTransfers(filters: {
         fromStore: true,
         toStore: true,
         requestedBy: { select: { id: true, name: true } },
-        approvedBy: { select: { id: true, name: true } },
+        approvedBy:  { select: { id: true, name: true } },
         items: true,
-        deliveryRequest: {
-          select: { id: true, invoiceNumber: true, customerName: true },
-        },
+        deliveryRequest: { select: { id: true, invoiceNumber: true, customerName: true } },
         dispatch: true,
         history: { orderBy: { createdAt: "asc" } },
       },
       orderBy: [
-        { priority: "asc" },   // URGENT primeiro
+        { priority: "asc" },    // URGENT primeiro
         { requestedAt: "desc" },
       ],
-      take: filters.limit ?? 50,
+      take: filters.limit  ?? 50,
       skip: filters.offset ?? 0,
     }),
     prisma.transfer.count({ where }),
@@ -277,12 +463,12 @@ export async function listTransfers(filters: {
 // ──────────────────────────────────────────────
 
 const VALID_TRANSITIONS: Record<TransferStatus, TransferStatus[]> = {
-  PENDING: [TransferStatus.APPROVED, TransferStatus.CANCELLED],
-  APPROVED: [TransferStatus.PREPARING, TransferStatus.CANCELLED],
-  PREPARING: [TransferStatus.IN_TRANSIT, TransferStatus.CANCELLED],
-  IN_TRANSIT: [TransferStatus.RECEIVED, TransferStatus.CANCELLED],
-  RECEIVED: [],  // estado final
-  CANCELLED: [], // estado final
+  PENDING:    [TransferStatus.APPROVED,   TransferStatus.CANCELLED],
+  APPROVED:   [TransferStatus.PREPARING,  TransferStatus.CANCELLED],
+  PREPARING:  [TransferStatus.IN_TRANSIT, TransferStatus.CANCELLED],
+  IN_TRANSIT: [TransferStatus.RECEIVED,   TransferStatus.CANCELLED],
+  RECEIVED:   [],
+  CANCELLED:  [],
 };
 
 function validateStatusTransition(from: TransferStatus, to: TransferStatus): void {

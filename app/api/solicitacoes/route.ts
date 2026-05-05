@@ -3,32 +3,28 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getSessionFromRequest } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/types";
-import { DeliveryType } from "@prisma/client";
-import { fetchInvoiceFromERP, fetchStockForItems } from "@/services/erp.service";
+import { DeliveryType, DeliveryRequestStatus, TransferPriority } from "@prisma/client";
+import { fetchOrderFromERP, fetchStockForItems } from "@/services/erp.service";
 import { createTransfer } from "@/services/transferencia.service";
-import { TransferPriority } from "@prisma/client";
 import { createOrUpdateInitialAudit } from "@/services/audit.service";
 
 const createSchema = z.object({
-  invoiceNumber: z.string().min(1),
-  storeId: z.string(),
+  // identificação pelo Pedido (PD)
+  orderNumber:   z.string().min(1, "Informe o número do pedido"),
+  orderStoreId:  z.string().min(1, "Selecione a loja do pedido"),
+  // dados da solicitação
+  storeId:       z.string().min(1),
   freightQuoteId: z.string().optional(),
   chargedFreight: z.number().optional(),
-  deliveryType: z.nativeEnum(DeliveryType).default(DeliveryType.STANDARD),
-  isComplete: z.boolean(),
-  notes: z.string().optional(),
-  scheduledFor: z.string().datetime().optional(),
-  // itens com disponibilidade já verificada
-  itemsAvailability: z.array(
-    z.object({
-      productCode: z.string(),
-      productName: z.string(),
-      quantity: z.number(),
-      unit: z.string().default("UN"),
-      availableAtStore: z.boolean(),
-      sourceStoreId: z.string().optional(),
-    })
-  ).optional(),
+  deliveryType:  z.nativeEnum(DeliveryType).default(DeliveryType.STANDARD),
+  notes:         z.string().optional(),
+  scheduledFor:  z.string().datetime().optional(),
+  deliveryWindowStart: z.string().optional(), // "HH:MM"
+  deliveryWindowEnd:   z.string().optional(), // "HH:MM"
+  // dados do destinatário (sempre do vendedor)
+  customerName:  z.string().min(2, "Informe o nome do destinatário"),
+  customerPhone: z.string().min(8, "Informe o telefone do destinatário"),
+  deliveryAddress: z.string().min(5, "Informe o endereço de entrega"),
 });
 
 export async function GET(req: NextRequest) {
@@ -49,19 +45,13 @@ export async function GET(req: NextRequest) {
         ...(storeId ? { storeId } : {}),
       },
       include: {
-        store: { select: { code: true, name: true } },
-        seller: { select: { id: true, name: true } },
+        store:      { select: { code: true, name: true } },
+        orderStore: { select: { code: true } },
+        seller:     { select: { id: true, name: true } },
         freightQuote: { include: { zone: true } },
         items: true,
         transfers: {
-          select: {
-            id: true,
-            status: true,
-            priority: true,
-            fromStoreId: true,
-            toStoreId: true,
-            requestedAt: true,
-          },
+          select: { id: true, status: true, priority: true, fromStoreId: true, toStoreId: true, requestedAt: true },
         },
         dispatch: { select: { id: true, status: true, modal: true } },
       },
@@ -77,6 +67,8 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  let orderKey: { orderNumber: string; orderStoreId: string } | null = null;
+
   try {
     const session = await getSessionFromRequest(req);
     if (!session) {
@@ -94,121 +86,148 @@ export async function POST(req: NextRequest) {
     }
 
     const data = parsed.data;
+    orderKey = { orderNumber: data.orderNumber, orderStoreId: data.orderStoreId };
 
-    // busca dados do ERP para completar a solicitação
-    const invoice = await fetchInvoiceFromERP(data.invoiceNumber);
-    if (!invoice) {
+    // Verifica duplicata antes de criar (evita erro 500 da constraint UNIQUE)
+    const existing = await prisma.deliveryRequest.findFirst({
+      where: { orderNumber: data.orderNumber, orderStoreId: data.orderStoreId },
+      select: { id: true },
+    });
+    if (existing) {
       return NextResponse.json(
-        apiError(`Nota fiscal ${data.invoiceNumber} não encontrada no ERP`, "NOT_FOUND"),
-        { status: 404 }
+        apiError("Já existe uma solicitação de entrega para este pedido", "DUPLICATE", { existingId: existing.id }),
+        { status: 409 }
       );
     }
 
-    // verifica disponibilidade de estoque por item se não foi enviada
-    const itemsWithAvailability = data.itemsAvailability ??
-      (await fetchStockForItems(invoice.items)).map((r) => ({
-        productCode: r.productCode,
-        productName: r.productName,
-        quantity: r.requestedQty,
-        unit: "UN",
-        availableAtStore: r.stock?.availability.find(
-          (a) => a.storeCode === invoice.storeCode
-        )?.available ?? false,
-        sourceStoreId: undefined,
-      }));
-
-    const allAvailable = itemsWithAvailability.every((i) => i.availableAtStore);
-
-    // cria a solicitação de entrega
-    const deliveryRequest = await prisma.deliveryRequest.create({
-      data: {
-        invoiceNumber: data.invoiceNumber,
-        storeId: data.storeId,
-        sellerId: session.userId,
-        customerId: invoice.customer.id,
-        customerName: invoice.customer.name,
-        customerPhone: invoice.customer.phone,
-        customerDoc: invoice.customer.document,
-        deliveryAddress: `${invoice.deliveryAddress.street}${invoice.deliveryAddress.complement ? `, ${invoice.deliveryAddress.complement}` : ""}, ${invoice.deliveryAddress.city}`,
-        deliveryCity: invoice.deliveryAddress.city,
-        deliveryType: data.deliveryType,
-        isComplete: allAvailable,
-        freightQuoteId: data.freightQuoteId,
-        chargedFreight: data.chargedFreight,
-        totalValue: invoice.totalValue,
-        notes: data.notes,
-        scheduledFor: data.scheduledFor ? new Date(data.scheduledFor) : undefined,
-        status: allAvailable ? "PENDING" : "AWAITING_TRANSFER",
-        items: {
-          create: itemsWithAvailability.map((item) => ({
-            productCode: item.productCode,
-            productName: item.productName,
-            quantity: item.quantity,
-            unit: item.unit,
-            availableAtStore: item.availableAtStore,
-            sourceStoreId: item.sourceStoreId,
-          })),
-        },
-      },
-      include: {
-        items: true,
-        store: true,
-      },
+    // Busca loja do pedido para obter o código (necessário para consulta ERP)
+    const orderStore = await prisma.store.findUnique({
+      where: { id: data.orderStoreId },
+      select: { code: true },
     });
 
-    // se itens faltam, cria transferências automaticamente
+    if (!orderStore) {
+      return NextResponse.json(apiError("Loja do pedido não encontrada"), { status: 400 });
+    }
+
+    // Lookup no ERP: opcional e não-bloqueante
+    // Se encontrar o PD, enriquece dados de itens para verificar estoque
+    const erpOrder = await fetchOrderFromERP(data.orderNumber, orderStore.code).catch(() => null);
+
+    // Verifica disponibilidade de estoque só se o ERP retornou itens
+    const itemsWithAvailability = erpOrder?.items.length
+      ? (await fetchStockForItems(erpOrder.items)).map((r) => ({
+          productCode:     r.productCode,
+          productName:     r.productName,
+          quantity:        r.requestedQty,
+          unit:            "UN",
+          availableAtStore: r.stock?.availability.find((a) => a.storeCode === orderStore.code)?.available ?? false,
+          sourceStoreId:   undefined as string | undefined,
+        }))
+      : [];
+
+    const allAvailable = itemsWithAvailability.length > 0 &&
+      itemsWithAvailability.every((i) => i.availableAtStore);
+
+    const initialStatus: DeliveryRequestStatus = itemsWithAvailability.length === 0
+      ? DeliveryRequestStatus.PENDING           // sem itens do ERP: operador define depois
+      : allAvailable
+        ? DeliveryRequestStatus.PENDING
+        : DeliveryRequestStatus.AWAITING_TRANSFER;
+
+    const deliveryRequest = await prisma.deliveryRequest.create({
+      data: {
+        orderNumber:      data.orderNumber,
+        orderStoreId:     data.orderStoreId,
+        invoiceNumber:    null,                 // preenchida depois pelo CD
+        invoiceStoreId:   null,
+        storeId:          data.storeId,
+        sellerId:         session.userId,
+        customerName:     data.customerName,
+        customerPhone:    data.customerPhone,
+        deliveryAddress:  data.deliveryAddress,
+        deliveryWindowStart: data.deliveryWindowStart,
+        deliveryWindowEnd:   data.deliveryWindowEnd,
+        deliveryType:     data.deliveryType,
+        isComplete:       allAvailable,
+        freightQuoteId:   data.freightQuoteId,
+        chargedFreight:   data.chargedFreight,
+        totalValue:       erpOrder?.totalValue ?? null,
+        notes:            data.notes,
+        scheduledFor:     data.scheduledFor ? new Date(data.scheduledFor) : undefined,
+        status:           initialStatus,
+        items: itemsWithAvailability.length > 0
+          ? {
+              create: itemsWithAvailability.map((item) => ({
+                productCode:      item.productCode,
+                productName:      item.productName,
+                quantity:         item.quantity,
+                unit:             item.unit,
+                availableAtStore: item.availableAtStore,
+                sourceStoreId:    item.sourceStoreId,
+              })),
+            }
+          : undefined,
+      },
+      include: { items: true, store: true },
+    });
+
+    // Cria transferências automáticas para itens faltantes (só quando veio do ERP)
     const missingItems = itemsWithAvailability.filter((i) => !i.availableAtStore);
     if (missingItems.length > 0) {
-      // agrupa por loja de origem (simplificado — em produção sugeriria por item)
       await createTransfer({
         deliveryRequestId: deliveryRequest.id,
-        fromStoreId: data.storeId, // operador refinará depois
-        toStoreId: data.storeId,
-        priority: data.deliveryType === DeliveryType.URGENT
+        fromStoreId:       data.storeId,
+        toStoreId:         data.storeId,
+        priority:          data.deliveryType === DeliveryType.URGENT
           ? TransferPriority.URGENT
           : TransferPriority.ANTICIPATED,
-        requestedById: session.userId,
-        notes: `Transferência automática para NF ${data.invoiceNumber}`,
-        items: missingItems.map((i) => ({
-          productCode: i.productCode,
-          productName: i.productName,
-          quantity: i.quantity,
-          unit: i.unit,
+        requestedById:     session.userId,
+        notes:             `Transferência automática para PD ${data.orderNumber}`,
+        items:             missingItems.map((i) => ({
+          productCode:  i.productCode,
+          productName:  i.productName,
+          quantity:     i.quantity,
+          unit:         i.unit,
         })),
       });
     }
 
-    // cria registro de auditoria de frete com desvio calculado
+    // Auditoria de frete
     if (data.freightQuoteId) {
       const quote = await prisma.freightQuote.findUnique({
         where: { id: data.freightQuoteId },
-        select: {
-          suggestedPrice: true,
-          distanceKm: true,
-          durationMinutes: true,
-          isApproximate: true,
-        },
+        select: { suggestedPrice: true, distanceKm: true, durationMinutes: true, isApproximate: true },
       });
-
       await createOrUpdateInitialAudit({
         deliveryRequestId: deliveryRequest.id,
-        storeId: deliveryRequest.storeId,
-        invoiceNumber: deliveryRequest.invoiceNumber,
-        sellerId: session.userId,
-        suggestedFreight: quote?.suggestedPrice ?? undefined,
-        chargedFreight: data.chargedFreight,
-        distanceKm: quote?.distanceKm ?? undefined,
-        durationMinutes: quote?.durationMinutes ?? undefined,
-        isApproximate: quote?.isApproximate ?? undefined,
-        totalValue: invoice.totalValue,
+        storeId:           deliveryRequest.storeId,
+        invoiceNumber:     deliveryRequest.orderNumber ?? deliveryRequest.id,
+        sellerId:          session.userId,
+        suggestedFreight:  quote?.suggestedPrice ?? undefined,
+        chargedFreight:    data.chargedFreight,
+        distanceKm:        quote?.distanceKm ?? undefined,
+        durationMinutes:   quote?.durationMinutes ?? undefined,
+        isApproximate:     quote?.isApproximate ?? undefined,
+        totalValue:        erpOrder?.totalValue ?? undefined,
       });
     }
 
     return NextResponse.json(apiSuccess(deliveryRequest), { status: 201 });
   } catch (error: unknown) {
     if ((error as { code?: string }).code === "P2002") {
+      const raceDupe = orderKey
+        ? await prisma.deliveryRequest.findFirst({
+            where: orderKey,
+            select: { id: true },
+          }).catch(() => null)
+        : null;
       return NextResponse.json(
-        apiError("Já existe uma solicitação para esta nota fiscal", "DUPLICATE"),
+        apiError(
+          "Já existe uma solicitação de entrega para este pedido",
+          "DUPLICATE",
+          raceDupe ? { existingId: raceDupe.id } : undefined
+        ),
         { status: 409 }
       );
     }

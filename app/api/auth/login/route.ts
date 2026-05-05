@@ -53,7 +53,8 @@ export async function POST(req: NextRequest) {
 
     return response;
   } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
     console.error("[POST /api/auth/login]", error);
-    return NextResponse.json(apiError("Erro no servidor"), { status: 500 });
+    return NextResponse.json(apiError(`Erro no servidor: ${msg}`), { status: 500 });
   }
 }

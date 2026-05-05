@@ -295,6 +295,32 @@ export interface ERPInvoice {
   issuedAt: string;
 }
 
+// dados de um Pedido (PD) retornados pelo ERP
+export interface ERPOrder {
+  orderNumber: string;
+  storeCode: string;
+  customer: {
+    id: string | null;
+    name: string;
+    phone: string | null;
+    document: string | null;
+  };
+  deliveryAddress: {
+    street: string;
+    complement: string | null;
+    city: string;
+    state: string;
+    zipCode: string;
+  };
+  items: {
+    productCode: string;
+    productName: string;
+    quantity: number;
+    unit: string;
+  }[];
+  totalValue: number;
+}
+
 // resposta quando consultamos estoque de um produto por loja
 export interface ERPStockByStore {
   productCode: string;
@@ -383,6 +409,8 @@ export interface LogisticsDashboardData {
   pendingTransfers: number;
   transfersInTransit: number;
   urgentTransfers: number;
+  // divergências operacionais (bloqueia READY enquanto > 0)
+  pendingDivergences: number;
   // despacho
   pendingDispatches: number;
   lalamoveActiveOrders: number;

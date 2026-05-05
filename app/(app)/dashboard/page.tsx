@@ -1,23 +1,50 @@
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
-import { formatCurrency, formatRelativeTime } from "@/lib/utils";
-import {
-  DELIVERY_STATUS_LABELS,
-  DELIVERY_STATUS_COLORS,
-  TRANSFER_STATUS_LABELS,
-  TRANSFER_STATUS_COLORS,
-  TRANSFER_PRIORITY_LABELS,
-  TRANSFER_PRIORITY_COLORS,
-  DISPATCH_MODAL_LABELS,
-} from "@/lib/constants";
+import { formatCurrency, formatRelativeTime, cn } from "@/lib/utils";
+import { TRANSFER_PRIORITY_LABELS, TRANSFER_PRIORITY_COLORS } from "@/lib/constants";
 import {
   Truck, ArrowLeftRight, Clock, CheckCircle,
   AlertTriangle, TrendingUp, Users, Package,
-  DollarSign, AlertOctagon
+  DollarSign, AlertOctagon, ChevronRight,
+  type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
-import { cn } from "@/lib/utils";
+import { PageHeader, MetricCard, StatusBadge } from "@/components/ui";
+import type { StatusVariant } from "@/components/ui";
+
+type MetricVariant = "default" | "urgent" | "warning" | "success" | "danger";
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <p
+      className="text-[10px] font-semibold uppercase mb-3"
+      style={{ letterSpacing: "0.14em", color: "#A3A3A3", fontFamily: "var(--font-body)" }}
+    >
+      {children}
+    </p>
+  );
+}
+
+function KpiLink({
+  href,
+  label,
+  value,
+  icon,
+  variant,
+}: {
+  href: string;
+  label: string;
+  value: string | number;
+  icon: LucideIcon;
+  variant: MetricVariant;
+}) {
+  return (
+    <Link href={href} className="block hover:opacity-90 transition-opacity">
+      <MetricCard label={label} value={value} icon={icon} variant={variant} />
+    </Link>
+  );
+}
 
 export default async function DashboardPage() {
   const session = await getSession();
@@ -26,7 +53,6 @@ export default async function DashboardPage() {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  // busca KPIs em paralelo
   const [
     pendingDeliveries,
     deliveriesToday,
@@ -41,6 +67,9 @@ export default async function DashboardPage() {
     recentTransfers,
     auditSummary,
     pendingJustifications,
+    oldestPendingDispatch,
+    oldestUrgentTransfer,
+    oldestPendingJustification,
   ] = await Promise.all([
     prisma.deliveryRequest.count({ where: { status: { in: ["PENDING", "AWAITING_ITEMS", "AWAITING_TRANSFER", "READY"] } } }),
     prisma.deliveryRequest.count({ where: { createdAt: { gte: today } } }),
@@ -71,7 +100,6 @@ export default async function DashboardPage() {
       orderBy: [{ priority: "asc" }, { requestedAt: "desc" }],
       take: 6,
     }),
-    // financeiro e auditoria para o dashboard
     prisma.freightAudit.aggregate({
       _avg: { deviationPercent: true },
       _sum: { chargedFreight: true, estimatedCost: true },
@@ -81,187 +109,204 @@ export default async function DashboardPage() {
     prisma.freightAudit.count({
       where: { createdAt: { gte: today }, justificationRequired: true, justification: null },
     }),
+    prisma.dispatch.findFirst({
+      where: { status: { in: ["PENDING", "ASSIGNED"] } },
+      orderBy: { createdAt: "asc" },
+      select: { createdAt: true },
+    }),
+    prisma.transfer.findFirst({
+      where: { priority: "URGENT", status: { notIn: ["RECEIVED", "CANCELLED"] } },
+      orderBy: { requestedAt: "asc" },
+      select: { requestedAt: true },
+    }),
+    prisma.freightAudit.findFirst({
+      where: { createdAt: { gte: today }, justificationRequired: true, justification: null },
+      orderBy: { createdAt: "asc" },
+      select: { createdAt: true },
+    }),
   ]);
 
-  const kpis = [
-    {
-      label: "Solicitações Pendentes",
-      value: pendingDeliveries,
-      icon: Package,
-      color: "text-yellow-600",
-      bg: "bg-yellow-50",
-      href: "/solicitacoes?status=PENDING",
-    },
-    {
-      label: "Em Trânsito",
-      value: inTransitDeliveries,
-      icon: Truck,
-      color: "text-blue-600",
-      bg: "bg-blue-50",
+  // Alertas que justificam CTA imediato — ordem: despachos → transferências urgentes → justificativas
+  const alertItems: { message: string; time: string | null; href: string; cta: string }[] = [];
+  if (pendingDispatches > 0) {
+    alertItems.push({
+      message: `${pendingDispatches} ${pendingDispatches === 1 ? "despacho pendente" : "despachos pendentes"} aguardando saída`,
+      time: oldestPendingDispatch ? formatRelativeTime(oldestPendingDispatch.createdAt) : null,
       href: "/despacho",
-    },
-    {
-      label: "Entregues Hoje",
-      value: deliveredToday,
-      icon: CheckCircle,
-      color: "text-green-600",
-      bg: "bg-green-50",
-      href: "/solicitacoes?status=DELIVERED",
-    },
-    {
-      label: "Transferências Pendentes",
-      value: pendingTransfers,
-      icon: ArrowLeftRight,
-      color: urgentTransfers > 0 ? "text-red-600" : "text-purple-600",
-      bg: urgentTransfers > 0 ? "bg-red-50" : "bg-purple-50",
+      cta: "Ir para Despacho",
+    });
+  }
+  if (urgentTransfers > 0) {
+    alertItems.push({
+      message: `${urgentTransfers} ${urgentTransfers === 1 ? "transferência urgente" : "transferências urgentes"} em aberto`,
+      time: oldestUrgentTransfer ? formatRelativeTime(oldestUrgentTransfer.requestedAt) : null,
       href: "/transferencias",
-      alert: urgentTransfers > 0 ? `${urgentTransfers} urgentes` : undefined,
-    },
-    {
-      label: "Transferências em Trânsito",
-      value: transfersInTransit,
-      icon: Clock,
-      color: "text-indigo-600",
-      bg: "bg-indigo-50",
-      href: "/transferencias?status=IN_TRANSIT",
-    },
-    {
-      label: "Despachos Pendentes",
-      value: pendingDispatches,
-      icon: AlertTriangle,
-      color: "text-orange-600",
-      bg: "bg-orange-50",
-      href: "/despacho",
-    },
-    {
-      label: "Motoristas Disponíveis",
-      value: activeDrivers,
-      icon: Users,
-      color: "text-teal-600",
-      bg: "bg-teal-50",
-      href: "/rastreamento",
-    },
-    {
-      label: "Frete Faturado Hoje",
-      value: formatCurrency(auditSummary._sum.chargedFreight ?? 0),
-      icon: TrendingUp,
-      color: "text-emerald-600",
-      bg: "bg-emerald-50",
-      href: "/auditoria",
-    },
-    {
-      label: "Custo Logístico Hoje",
-      value: formatCurrency(auditSummary._sum.estimatedCost ?? 0),
-      icon: DollarSign,
-      color: "text-blue-600",
-      bg: "bg-blue-50",
-      href: "/auditoria",
-    },
-    {
-      label: "Justificativas Pendentes",
-      value: pendingJustifications,
-      icon: AlertOctagon,
-      color: pendingJustifications > 0 ? "text-red-600" : "text-gray-400",
-      bg: pendingJustifications > 0 ? "bg-red-50" : "bg-gray-50",
+      cta: "Ver transferências",
+    });
+  }
+  if (pendingJustifications > 0) {
+    alertItems.push({
+      message: `${pendingJustifications} ${pendingJustifications === 1 ? "justificativa de frete pendente" : "justificativas de frete pendentes"}`,
+      time: oldestPendingJustification ? formatRelativeTime(oldestPendingJustification.createdAt) : null,
       href: "/auditoria?pendente=true",
-      alert: pendingJustifications > 0 ? "bloqueiam despacho" : undefined,
-    },
-  ];
+      cta: "Ver itens",
+    });
+  }
+
+  const MAX_ALERTS = 3;
+  const visibleAlerts = alertItems.slice(0, MAX_ALERTS);
+  const hiddenAlertsCount = alertItems.length - visibleAlerts.length;
+
+  const deviationPct = auditSummary._avg.deviationPercent ?? 0;
+  const deviationVariant: MetricVariant =
+    deviationPct > 15 ? "danger" : deviationPct > 0 ? "warning" : "success";
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
-      {/* Header */}
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Dashboard Logístico</h1>
-        <p className="text-gray-500 text-sm mt-1">
-          {new Date().toLocaleDateString("pt-BR", {
-            weekday: "long",
-            day: "numeric",
-            month: "long",
-          })}
-        </p>
-      </div>
+    <div>
+      <PageHeader
+        title="Dashboard Logístico"
+        description={new Date().toLocaleDateString("pt-BR", {
+          weekday: "long",
+          day: "numeric",
+          month: "long",
+        })}
+      />
 
-      {/* KPI Grid */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-        {kpis.map((kpi) => (
-          <Link
-            key={kpi.label}
-            href={kpi.href}
-            className="bg-white rounded-xl border border-gray-200 p-4 hover:shadow-md transition-shadow group"
+      {/* Banner de alertas — só aparece quando há itens críticos */}
+      {alertItems.length > 0 && (
+        <div
+          className="rounded-xl mb-6 overflow-hidden"
+          style={{ border: "1px solid rgba(220,38,38,0.2)", backgroundColor: "rgba(254,242,242,1)" }}
+        >
+          <div
+            className="flex items-center gap-2 px-4 py-2.5"
+            style={{ backgroundColor: "rgba(220,38,38,0.08)", borderBottom: "1px solid rgba(220,38,38,0.12)" }}
           >
-            <div className="flex items-start justify-between mb-3">
-              <div className={cn("p-2 rounded-lg", kpi.bg)}>
-                <kpi.icon className={cn("w-5 h-5", kpi.color)} />
-              </div>
-              {kpi.alert && (
-                <span className="text-xs font-medium bg-red-100 text-red-700 px-2 py-0.5 rounded-full">
-                  {kpi.alert}
-                </span>
-              )}
-            </div>
-            <p className="text-2xl font-bold text-gray-900 group-hover:text-orange-600 transition-colors">
-              {kpi.value}
+            <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" style={{ color: "#DC2626" }} />
+            <p className="text-[11px] font-semibold uppercase" style={{ letterSpacing: "0.1em", color: "#DC2626" }}>
+              Atenção necessária
             </p>
-            <p className="text-xs text-gray-500 mt-0.5 leading-tight">{kpi.label}</p>
-          </Link>
-        ))}
-      </div>
-
-      {/* Auditoria — desvio médio */}
-      {auditSummary._count.id > 0 && (
-        <div className="mb-6 bg-white rounded-xl border border-gray-200 p-5">
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-2">
-              <TrendingUp className="w-4 h-4 text-orange-500" />
-              <h2 className="font-semibold text-gray-900 text-sm">Desvio Médio de Frete Hoje</h2>
-            </div>
-            <Link href="/auditoria" className="text-xs text-orange-600 hover:underline font-medium">
-              Ver auditoria completa
-            </Link>
           </div>
-          <div className="flex items-center gap-3">
-            <p className={cn(
-              "text-3xl font-bold",
-              (auditSummary._avg.deviationPercent ?? 0) > 15
-                ? "text-red-600"
-                : (auditSummary._avg.deviationPercent ?? 0) > 0
-                ? "text-yellow-600"
-                : "text-green-600"
-            )}>
-              {(auditSummary._avg.deviationPercent ?? 0) > 0 ? "+" : ""}
-              {(auditSummary._avg.deviationPercent ?? 0).toFixed(1)}%
-            </p>
-            <div>
-              <p className="text-xs text-gray-500">
-                Baseado em {auditSummary._count.id} cotações do dia
-              </p>
-              <p className="text-xs text-gray-400">
-                Sugerido vs Cobrado — tolerância padrão 15%
-              </p>
-            </div>
+          <div className="divide-y divide-red-100">
+            {visibleAlerts.map((alert) => (
+              <div key={alert.href} className="flex items-center justify-between px-4 py-3 gap-4">
+                <div className="flex items-baseline gap-2 min-w-0">
+                  <p className="text-[13px]" style={{ color: "#7F1D1D" }}>
+                    {alert.message}
+                  </p>
+                  {alert.time && (
+                    <span className="text-[11px] flex-shrink-0" style={{ color: "#B91C1C" }}>
+                      · {alert.time}
+                    </span>
+                  )}
+                </div>
+                <Link
+                  href={alert.href}
+                  className="flex items-center gap-1 text-[12px] font-semibold flex-shrink-0 transition-opacity hover:opacity-70"
+                  style={{ color: "#DC2626" }}
+                >
+                  {alert.cta}
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </Link>
+              </div>
+            ))}
+            {hiddenAlertsCount > 0 && (
+              <div className="px-4 py-2.5">
+                <p className="text-[12px]" style={{ color: "#B91C1C" }}>
+                  + {hiddenAlertsCount} {hiddenAlertsCount === 1 ? "outro alerta" : "outros alertas"} — verifique as seções abaixo
+                </p>
+              </div>
+            )}
           </div>
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Transferências ativas */}
-        <div className="bg-white rounded-xl border border-gray-200">
-          <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <ArrowLeftRight className="w-4 h-4 text-orange-500" />
-              <h2 className="font-semibold text-gray-900 text-sm">Transferências Ativas</h2>
-            </div>
-            <Link
-              href="/transferencias"
-              className="text-xs text-orange-600 hover:underline font-medium"
+      {/* ENTREGAS */}
+      <div className="mb-6">
+        <SectionLabel>Entregas</SectionLabel>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <KpiLink href="/solicitacoes?status=PENDING" label="Pendentes"     value={pendingDeliveries}   icon={Package}       variant="warning" />
+          <KpiLink href="/despacho"                    label="Em Trânsito"   value={inTransitDeliveries} icon={Truck}         variant="default" />
+          <KpiLink href="/solicitacoes?status=DELIVERED" label="Entregues Hoje" value={deliveredToday}   icon={CheckCircle}   variant="success" />
+          <KpiLink href="/despacho"                    label="Aguardando Despacho" value={pendingDispatches} icon={AlertTriangle} variant={pendingDispatches > 0 ? "urgent" : "default"} />
+        </div>
+      </div>
+
+      {/* TRANSFERÊNCIAS */}
+      <div className="mb-6">
+        <SectionLabel>Transferências</SectionLabel>
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+          <KpiLink href="/transferencias"              label="Pendentes"      value={pendingTransfers}   icon={ArrowLeftRight} variant={urgentTransfers > 0 ? "danger" : "default"} />
+          <KpiLink href="/transferencias?status=IN_TRANSIT" label="Em Trânsito" value={transfersInTransit} icon={Clock}       variant="default" />
+          <KpiLink href="/rastreamento"                label="Motoristas Disp." value={activeDrivers}   icon={Users}         variant="default" />
+        </div>
+      </div>
+
+      {/* FINANCEIRO */}
+      <div className="mb-6">
+        <SectionLabel>Financeiro</SectionLabel>
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+          <KpiLink href="/auditoria"              label="Frete Faturado Hoje"  value={formatCurrency(auditSummary._sum.chargedFreight ?? 0)} icon={TrendingUp}  variant="success" />
+          <KpiLink href="/auditoria"              label="Custo Logístico Hoje" value={formatCurrency(auditSummary._sum.estimatedCost ?? 0)}  icon={DollarSign}  variant="default" />
+          <KpiLink href="/auditoria?pendente=true" label="Justific. Pendentes" value={pendingJustifications} icon={AlertOctagon} variant={pendingJustifications > 0 ? "danger" : "default"} />
+        </div>
+      </div>
+
+      {/* Desvio médio — só exibe quando há cotações no dia */}
+      {auditSummary._count.id > 0 && (
+        <div
+          className="mb-6 rounded-xl p-4 flex items-center gap-4"
+          style={{ backgroundColor: "white", border: "1px solid var(--color-border)" }}
+        >
+          <div>
+            <p className="text-[10px] font-semibold uppercase mb-1" style={{ letterSpacing: "0.12em", color: "#A3A3A3" }}>
+              Desvio médio de frete hoje
+            </p>
+            <p
+              className="text-[28px] font-bold leading-none tabular-nums"
+              style={{
+                fontFamily: "var(--font-display)",
+                color: deviationPct > 15 ? "#DC2626" : deviationPct > 0 ? "#D97706" : "#16A34A",
+              }}
             >
-              Ver todas
+              {deviationPct > 0 ? "+" : ""}{deviationPct.toFixed(1)}%
+            </p>
+          </div>
+          <div className="flex-1">
+            <p className="text-[12px]" style={{ color: "#737373" }}>
+              Baseado em {auditSummary._count.id} {auditSummary._count.id === 1 ? "cotação" : "cotações"} do dia
+            </p>
+            <p className="text-[11px]" style={{ color: "#A3A3A3" }}>
+              Sugerido vs Cobrado · tolerância padrão 15%
+            </p>
+          </div>
+          <Link
+            href="/auditoria"
+            className="text-[12px] font-medium flex items-center gap-1 flex-shrink-0 transition-opacity hover:opacity-70"
+            style={{ color: "var(--color-primary)" }}
+          >
+            Ver auditoria <ChevronRight className="w-3.5 h-3.5" />
+          </Link>
+        </div>
+      )}
+
+      {/* Listas: Transferências ativas + Solicitações de hoje */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-white rounded-xl" style={{ border: "1px solid var(--color-border)" }}>
+          <div className="px-5 py-4 flex items-center justify-between" style={{ borderBottom: "1px solid var(--color-border)" }}>
+            <div className="flex items-center gap-2">
+              <ArrowLeftRight className="w-4 h-4" style={{ color: "var(--color-primary)" }} />
+              <h2 className="text-[13px] font-semibold" style={{ color: "var(--color-body-text)" }}>
+                Transferências Ativas
+              </h2>
+            </div>
+            <Link href="/transferencias" className="text-[12px] font-medium flex items-center gap-0.5 transition-opacity hover:opacity-70" style={{ color: "var(--color-primary)" }}>
+              Ver todas <ChevronRight className="w-3.5 h-3.5" />
             </Link>
           </div>
-          <div className="divide-y divide-gray-50">
+          <div className="divide-y divide-gray-100">
             {recentTransfers.length === 0 ? (
-              <p className="text-sm text-gray-400 text-center py-8">
+              <p className="text-[13px] text-center py-8" style={{ color: "#A3A3A3" }}>
                 Nenhuma transferência ativa
               </p>
             ) : (
@@ -269,55 +314,44 @@ export default async function DashboardPage() {
                 <Link
                   key={transfer.id}
                   href={`/transferencias/${transfer.id}`}
-                  className="flex items-center gap-3 px-5 py-3 hover:bg-gray-50 transition-colors"
+                  className="flex items-center gap-3 px-5 py-3 transition-colors hover:bg-gray-50"
                 >
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-0.5">
-                      <span className="text-sm font-medium text-gray-900">
+                      <span className="text-[13px] font-medium" style={{ color: "var(--color-body-text)" }}>
                         {transfer.fromStore.code} → {transfer.toStore.code}
                       </span>
-                      <span className={cn(
-                        "text-xs px-1.5 py-0.5 rounded border font-medium",
-                        TRANSFER_PRIORITY_COLORS[transfer.priority]
-                      )}>
+                      <span className={cn("text-[11px] px-1.5 py-0.5 rounded border font-medium", TRANSFER_PRIORITY_COLORS[transfer.priority])}>
                         {TRANSFER_PRIORITY_LABELS[transfer.priority]}
                       </span>
                     </div>
-                    <p className="text-xs text-gray-400">
-                      {transfer.items.length} {transfer.items.length === 1 ? "item" : "itens"} •{" "}
-                      {formatRelativeTime(transfer.requestedAt)}
+                    <p className="text-[11px]" style={{ color: "#A3A3A3" }}>
+                      {transfer.items.length} {transfer.items.length === 1 ? "item" : "itens"} · {formatRelativeTime(transfer.requestedAt)}
                     </p>
                   </div>
-                  <span className={cn(
-                    "text-xs px-2 py-0.5 rounded-full font-medium border",
-                    TRANSFER_STATUS_COLORS[transfer.status]
-                  )}>
-                    {TRANSFER_STATUS_LABELS[transfer.status]}
-                  </span>
+                  <StatusBadge status={transfer.status as StatusVariant} />
                 </Link>
               ))
             )}
           </div>
         </div>
 
-        {/* Solicitações de hoje */}
-        <div className="bg-white rounded-xl border border-gray-200">
-          <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+        <div className="bg-white rounded-xl" style={{ border: "1px solid var(--color-border)" }}>
+          <div className="px-5 py-4 flex items-center justify-between" style={{ borderBottom: "1px solid var(--color-border)" }}>
             <div className="flex items-center gap-2">
-              <Package className="w-4 h-4 text-orange-500" />
-              <h2 className="font-semibold text-gray-900 text-sm">Solicitações de Hoje</h2>
-              <span className="text-xs text-gray-400">({deliveriesToday})</span>
+              <Package className="w-4 h-4" style={{ color: "var(--color-primary)" }} />
+              <h2 className="text-[13px] font-semibold" style={{ color: "var(--color-body-text)" }}>
+                Solicitações de Hoje
+              </h2>
+              <span className="text-[11px]" style={{ color: "#A3A3A3" }}>({deliveriesToday})</span>
             </div>
-            <Link
-              href="/solicitacoes"
-              className="text-xs text-orange-600 hover:underline font-medium"
-            >
-              Ver todas
+            <Link href="/solicitacoes" className="text-[12px] font-medium flex items-center gap-0.5 transition-opacity hover:opacity-70" style={{ color: "var(--color-primary)" }}>
+              Ver todas <ChevronRight className="w-3.5 h-3.5" />
             </Link>
           </div>
-          <div className="divide-y divide-gray-50">
+          <div className="divide-y divide-gray-100">
             {recentDeliveries.length === 0 ? (
-              <p className="text-sm text-gray-400 text-center py-8">
+              <p className="text-[13px] text-center py-8" style={{ color: "#A3A3A3" }}>
                 Nenhuma solicitação hoje
               </p>
             ) : (
@@ -325,25 +359,20 @@ export default async function DashboardPage() {
                 <Link
                   key={req.id}
                   href={`/solicitacoes/${req.id}`}
-                  className="flex items-center gap-3 px-5 py-3 hover:bg-gray-50 transition-colors"
+                  className="flex items-center gap-3 px-5 py-3 transition-colors hover:bg-gray-50"
                 >
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-0.5">
-                      <span className="text-sm font-medium text-gray-900">
+                      <span className="text-[13px] font-medium" style={{ color: "var(--color-body-text)" }}>
                         NF {req.invoiceNumber}
                       </span>
-                      <span className="text-xs text-gray-400">— Loja {req.store.code}</span>
+                      <span className="text-[11px]" style={{ color: "#A3A3A3" }}>— Loja {req.store.code}</span>
                     </div>
-                    <p className="text-xs text-gray-400 truncate">
-                      {req.customerName} • {formatRelativeTime(req.createdAt)}
+                    <p className="text-[11px] truncate" style={{ color: "#A3A3A3" }}>
+                      {req.customerName} · {formatRelativeTime(req.createdAt)}
                     </p>
                   </div>
-                  <span className={cn(
-                    "text-xs px-2 py-0.5 rounded-full font-medium",
-                    DELIVERY_STATUS_COLORS[req.status]
-                  )}>
-                    {DELIVERY_STATUS_LABELS[req.status]}
-                  </span>
+                  <StatusBadge status={req.status as StatusVariant} />
                 </Link>
               ))
             )}

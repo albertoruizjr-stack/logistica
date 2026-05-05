@@ -100,11 +100,13 @@ export interface StockReconcileResult {
   }[];
 }
 
+export type ResolutionType = "MISSING_PRODUCT" | "EXTRA_PRODUCT" | "OPERATIONAL_ERROR";
+
 export interface DivergenceResolveInput {
   divergenceId: string;
+  resolutionType: ResolutionType;
   resolution: string;
   resolvedById: string;
-  adjustLedger: boolean;             // true = ajusta qtdFisica pela divergência
 }
 
 // ──────────────────────────────────────────────

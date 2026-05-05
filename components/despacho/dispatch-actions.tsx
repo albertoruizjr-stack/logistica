@@ -16,20 +16,32 @@ interface Props {
   deliveryRequestId: string;
   deliveryType: string;
   drivers: Driver[];
+  nfLinkError?: string | null;
 }
 
-export function DispatchActionPanel({ deliveryRequestId, deliveryType, drivers }: Props) {
+export function DispatchActionPanel({ deliveryRequestId, deliveryType, drivers, nfLinkError }: Props) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [selectedModal, setSelectedModal] = useState<string>(
     deliveryType === "URGENT" ? "LALAMOVE" : "INTERNAL_ROUTE"
   );
-  const [selectedDriverId, setSelectedDriverId] = useState("");
-  const [estimatedCost, setEstimatedCost] = useState("");
+  const [selectedDriverId, setSelectedDriverId]     = useState("");
+  const [estimatedCost, setEstimatedCost]           = useState("");
+  const [multiNfConfirmed, setMultiNfConfirmed]     = useState(false);
+
+  const requiresMultiNfConfirm = nfLinkError === "MULTIPLE_NF";
 
   async function handleDispatch() {
     setLoading(true);
     try {
+      // Registra revisão antes de despachar (fire-and-forget — não bloqueia o despacho)
+      if (requiresMultiNfConfirm && multiNfConfirmed) {
+        fetch(`/api/solicitacoes/${deliveryRequestId}/nf-review`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+        }).catch(() => null);
+      }
+
       const res = await fetch("/api/despacho", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -119,10 +131,23 @@ export function DispatchActionPanel({ deliveryRequestId, deliveryType, drivers }
           />
         </div>
 
+        {/* Confirmação obrigatória para MULTIPLE_NF */}
+        {requiresMultiNfConfirm && (
+          <label className="w-full flex items-center gap-2 text-xs text-red-700 cursor-pointer select-none mt-1">
+            <input
+              type="checkbox"
+              checked={multiNfConfirmed}
+              onChange={(e) => setMultiNfConfirmed(e.target.checked)}
+              className="w-3.5 h-3.5 accent-red-600 cursor-pointer"
+            />
+            Confirmo que as NFs foram verificadas e o despacho está autorizado
+          </label>
+        )}
+
         {/* Botão despachar */}
         <button
           onClick={handleDispatch}
-          disabled={loading}
+          disabled={loading || (requiresMultiNfConfirm && !multiNfConfirmed)}
           className="ml-auto flex items-center gap-1.5 text-xs font-semibold px-4 py-1.5 bg-orange-500 text-white rounded-lg hover:bg-orange-600 disabled:opacity-60 transition"
         >
           {loading ? (

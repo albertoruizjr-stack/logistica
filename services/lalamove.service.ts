@@ -9,6 +9,13 @@ import { LALAMOVE_API_BASE_URL, LALAMOVE_SANDBOX_URL, LALAMOVE_SERVICE_TYPE } fr
 import type { LalamoveQuoteRequest, LalamoveQuoteResponse, LalamoveOrderStatus, LalamoveStop } from "@/types";
 
 // ──────────────────────────────────────────────
+// TIPO DE RETORNO QUANDO NÃO CONFIGURADO
+// ──────────────────────────────────────────────
+
+export type LalamoveNotConfigured = { success: false; reason: "NOT_CONFIGURED" };
+const NOT_CONFIGURED: LalamoveNotConfigured = { success: false, reason: "NOT_CONFIGURED" };
+
+// ──────────────────────────────────────────────
 // CONFIGURAÇÃO E AUTENTICAÇÃO
 // ──────────────────────────────────────────────
 
@@ -19,6 +26,11 @@ function getLalamoveConfig() {
     isSandbox: process.env.LALAMOVE_SANDBOX === "true",
     market: process.env.LALAMOVE_MARKET || "BR",
   };
+}
+
+export function isLalamoveConfigured(): boolean {
+  const { apiKey, apiSecret } = getLalamoveConfig();
+  return Boolean(apiKey && apiSecret);
 }
 
 function getBaseUrl(): string {
@@ -60,7 +72,9 @@ export async function getLalamoveQuote(
   destinationStop: LalamoveStop,
   isUrgent:        boolean = false,
   serviceType:     string = LALAMOVE_SERVICE_TYPE
-): Promise<LalamoveQuoteResponse> {
+): Promise<LalamoveQuoteResponse | LalamoveNotConfigured> {
+  if (!isLalamoveConfigured()) return NOT_CONFIGURED;
+
   const path = "/v3/quotations";
   const body: LalamoveQuoteRequest = {
     language: "pt_BR",
@@ -99,7 +113,9 @@ export async function createLalamoveOrder(
   originStop: LalamoveStop,
   destinationStop: LalamoveStop,
   senderPhone: string
-): Promise<{ orderId: string; shareLink?: string }> {
+): Promise<{ orderId: string; shareLink?: string } | LalamoveNotConfigured> {
+  if (!isLalamoveConfigured()) return NOT_CONFIGURED;
+
   const path = "/v3/orders";
   const body = {
     quotationId,
@@ -148,7 +164,9 @@ export async function getLalamoveOrderStatus(orderId: string): Promise<{
   driverPhone?: string;
   driverPlate?: string;
   priceBreakdown?: { total: string; currency: string };
-}> {
+} | LalamoveNotConfigured> {
+  if (!isLalamoveConfigured()) return NOT_CONFIGURED;
+
   const path = `/v3/orders/${orderId}`;
   const response = await fetch(`${getBaseUrl()}${path}`, {
     headers: buildHeaders("GET", path),
@@ -172,7 +190,9 @@ export async function getLalamoveOrderStatus(orderId: string): Promise<{
 // CANCELAMENTO
 // ──────────────────────────────────────────────
 
-export async function cancelLalamoveOrder(orderId: string): Promise<void> {
+export async function cancelLalamoveOrder(orderId: string): Promise<LalamoveNotConfigured | void> {
+  if (!isLalamoveConfigured()) return NOT_CONFIGURED;
+
   const path = `/v3/orders/${orderId}/cancel`;
   const response = await fetch(`${getBaseUrl()}${path}`, {
     method: "PUT",
@@ -196,6 +216,7 @@ export function verifyLalamoveWebhook(
   timestamp: string
 ): boolean {
   const { apiSecret } = getLalamoveConfig();
+  if (!apiSecret) return false;
   const expectedSignature = generateSignature(apiSecret, timestamp, "POST", "/webhook", payload);
   return crypto.timingSafeEqual(
     Buffer.from(signature, "hex"),

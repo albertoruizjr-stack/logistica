@@ -1,19 +1,21 @@
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
+import { Suspense } from "react";
 import { listTransfers } from "@/services/transferencia.service";
 import { TransferStatus, TransferPriority } from "@prisma/client";
 import {
-  TRANSFER_STATUS_LABELS, TRANSFER_STATUS_COLORS,
   TRANSFER_PRIORITY_LABELS, TRANSFER_PRIORITY_COLORS,
 } from "@/lib/constants";
-import { cn, formatRelativeTime, formatDateTime } from "@/lib/utils";
+import { cn, formatRelativeTime } from "@/lib/utils";
 import {
-  ArrowLeftRight, Plus, Package, Clock, CheckCircle2,
-  AlertTriangle, Filter
+  ArrowLeftRight, Plus, Package,
 } from "lucide-react";
 import Link from "next/link";
 import { TransferActionsPanel } from "@/components/transferencias/transfer-actions";
+import { PageHeader, StatusBadge, EmptyState } from "@/components/ui";
+import type { StatusVariant } from "@/components/ui";
+import TransferenciasFilters from "./_components/transferencias-filters";
 
 interface SearchParams {
   status?: string;
@@ -80,29 +82,26 @@ export default async function TransferenciasPage({
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-bold text-gray-900">Transferências</h1>
+      <PageHeader
+        title="Transferências"
+        description={`${total} transferência${total !== 1 ? "s" : ""} no filtro atual`}
+        actions={
+          <>
             {urgentCount > 0 && (
               <span className="bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full animate-pulse">
                 {urgentCount} urgente{urgentCount > 1 ? "s" : ""}
               </span>
             )}
-          </div>
-          <p className="text-gray-500 text-sm mt-1">
-            {total} transferência{total !== 1 ? "s" : ""} no filtro atual
-          </p>
-        </div>
-        <Link
-          href="/transferencias/nova"
-          className="flex items-center gap-2 bg-orange-500 text-white px-4 py-2.5 rounded-lg text-sm font-medium hover:bg-orange-600 transition"
-        >
-          <Plus className="w-4 h-4" />
-          Nova transferência
-        </Link>
-      </div>
+            <Link
+              href="/transferencias/nova"
+              className="flex items-center gap-2 bg-orange-500 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-orange-600 transition"
+            >
+              <Plus className="w-4 h-4" />
+              Nova transferência
+            </Link>
+          </>
+        }
+      />
 
       {/* Abas de status */}
       <div className="flex gap-1 mb-5 bg-gray-100 p-1 rounded-xl w-fit overflow-x-auto">
@@ -138,42 +137,19 @@ export default async function TransferenciasPage({
         })}
       </div>
 
-      {/* Filtros de loja */}
-      <div className="flex items-center gap-3 mb-5">
-        <Filter className="w-4 h-4 text-gray-400" />
-        <div className="flex gap-2">
-          {["Todas as lojas", ...stores.map((s) => s.code)].map((code) => (
-            <Link
-              key={code}
-              href={
-                code === "Todas as lojas"
-                  ? `/transferencias${searchParams.status ? `?status=${searchParams.status}` : ""}`
-                  : `/transferencias?${searchParams.status ? `status=${searchParams.status}&` : ""}fromStore=${stores.find((s) => s.code === code)?.id}`
-              }
-              className={cn(
-                "px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors",
-                (code === "Todas as lojas" && !searchParams.fromStore) ||
-                  (code !== "Todas as lojas" &&
-                    searchParams.fromStore === stores.find((s) => s.code === code)?.id)
-                  ? "bg-gray-900 text-white border-gray-900"
-                  : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
-              )}
-            >
-              {code}
-            </Link>
-          ))}
-        </div>
-      </div>
+      <Suspense
+        fallback={<div className="h-12 bg-slate-50 border border-slate-200 rounded-lg animate-pulse mb-5" />}
+      >
+        <TransferenciasFilters stores={stores} />
+      </Suspense>
 
       {/* Lista de transferências */}
       {transfers.length === 0 ? (
-        <div className="bg-white rounded-xl border border-gray-200 py-16 text-center">
-          <ArrowLeftRight className="w-12 h-12 text-gray-200 mx-auto mb-3" />
-          <p className="text-gray-500 font-medium">Nenhuma transferência no filtro selecionado</p>
-          <p className="text-sm text-gray-400 mt-1">
-            Crie uma nova transferência ou ajuste os filtros
-          </p>
-        </div>
+        <EmptyState
+          icon={ArrowLeftRight}
+          title="Nenhuma transferência no filtro selecionado"
+          description="Crie uma nova transferência ou ajuste os filtros."
+        />
       ) : (
         <div className="space-y-3">
           {transfers.map((transfer) => (
@@ -209,12 +185,7 @@ export default async function TransferenciasPage({
                   )}>
                     {TRANSFER_PRIORITY_LABELS[transfer.priority]}
                   </span>
-                  <span className={cn(
-                    "text-xs px-2 py-0.5 rounded-full font-medium border",
-                    TRANSFER_STATUS_COLORS[transfer.status]
-                  )}>
-                    {TRANSFER_STATUS_LABELS[transfer.status]}
-                  </span>
+                  <StatusBadge status={transfer.status as StatusVariant} />
                   {transfer.deliveryRequest && (
                     <span className="text-xs text-gray-400 flex items-center gap-1">
                       <Package className="w-3 h-3" />

@@ -1,13 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import {
   Loader2, Search, Package, User, MapPin, CheckCircle2,
-  AlertTriangle, ArrowLeftRight, FileText, Zap
+  AlertTriangle, ArrowLeftRight, FileText, Zap, TrendingUp
 } from "lucide-react";
 import { cn, formatCurrency } from "@/lib/utils";
 import type { ERPInvoice } from "@/types";
@@ -43,7 +43,7 @@ interface Props {
   sessionUserId: string;
 }
 
-type Step = "SEARCH" | "CONFIRM" | "AVAILABILITY" | "SUBMITTING" | "DONE";
+type Step = "SEARCH" | "CONFIRM" | "AVAILABILITY" | "SUBMITTING" | "DONE" | "DUPLICATE";
 
 export function NovaSolicitacaoForm({ stores, sessionStoreId }: Props) {
   const router = useRouter();
@@ -52,10 +52,13 @@ export function NovaSolicitacaoForm({ stores, sessionStoreId }: Props) {
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [createdId, setCreatedId] = useState<string | null>(null);
+  const [duplicateId, setDuplicateId] = useState<string | null>(null);
   // disponibilidade de cada item
   const [itemAvailability, setItemAvailability] = useState<Record<string, boolean>>({});
-  // cotação de frete calculada
+  // cotação de frete
   const [suggestedFreight, setSuggestedFreight] = useState<number | null>(null);
+  const [destCoords, setDestCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [freightLoading, setFreightLoading] = useState(false);
 
   const step1 = useForm<Step1Data>({
     resolver: zodResolver(step1Schema),
@@ -66,6 +69,73 @@ export function NovaSolicitacaoForm({ stores, sessionStoreId }: Props) {
     resolver: zodResolver(step2Schema),
     defaultValues: { isComplete: true, deliveryType: "STANDARD", chargedFreight: 0 },
   });
+
+  // Recalcula cotação com coords já conhecidas (muda só isUrgent)
+  const refreshQuote = useCallback(async (coords: { lat: number; lng: number }, storeId: string, isUrgent: boolean) => {
+    const store = stores.find((s) => s.id === storeId);
+    if (!store || !invoice) return;
+    setFreightLoading(true);
+    try {
+      const address = `${invoice.deliveryAddress.street}, ${invoice.deliveryAddress.city}, ${invoice.deliveryAddress.state}`;
+      const res = await fetch("/api/frete/cotacao", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          storeId: store.id,
+          originAddress: store.name,
+          originLat: store.lat,
+          originLng: store.lng,
+          destAddress: address,
+          destLat: coords.lat,
+          destLng: coords.lng,
+          isUrgent,
+          save: false,
+        }),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        setSuggestedFreight(json.data.suggestedPrice);
+        step2.setValue("chargedFreight", json.data.suggestedPrice);
+      }
+    } catch {
+      // falha silenciosa — usuário digita manualmente
+    } finally {
+      setFreightLoading(false);
+    }
+  }, [invoice, stores, step2]);
+
+  // Geocodifica endereço + calcula cotação inicial
+  async function geocodeAndQuote(inv: ERPInvoice, storeId: string) {
+    const store = stores.find((s) => s.id === storeId);
+    if (!store) return;
+    setFreightLoading(true);
+    try {
+      const address = `${inv.deliveryAddress.street}, ${inv.deliveryAddress.city}, ${inv.deliveryAddress.state}`;
+      const geoRes = await fetch("/api/geocode", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address }),
+      });
+      const geoJson = await geoRes.json();
+      if (!geoRes.ok || !geoJson.success) return;
+
+      const coords = { lat: geoJson.data.lat, lng: geoJson.data.lng };
+      setDestCoords(coords);
+      await refreshQuote(coords, storeId, step2.getValues("deliveryType") === "URGENT");
+    } catch {
+      // endereço não encontrado — usuário digita manualmente
+    } finally {
+      setFreightLoading(false);
+    }
+  }
+
+  // Recotiza quando tipo de entrega muda (só se coordenadas já conhecidas)
+  const watchedDeliveryType = step2.watch("deliveryType");
+  useEffect(() => {
+    if (!destCoords || step === "SEARCH") return;
+    void refreshQuote(destCoords, step1.getValues("storeId"), watchedDeliveryType === "URGENT");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [watchedDeliveryType]);
 
   // Step 1: busca NF no ERP
   async function handleSearch(data: Step1Data) {
@@ -89,6 +159,9 @@ export function NovaSolicitacaoForm({ stores, sessionStoreId }: Props) {
       setItemAvailability(avail);
 
       setStep("CONFIRM");
+
+      // geocodifica + cotiza frete em background (não bloqueia o avanço de tela)
+      void geocodeAndQuote(json.data, data.storeId);
     } catch {
       setFetchError("Erro de conexão ao consultar o ERP");
     }
@@ -103,13 +176,45 @@ export function NovaSolicitacaoForm({ stores, sessionStoreId }: Props) {
   }
 
   const allAvailable = Object.values(itemAvailability).every(Boolean);
-  const missingCount = Object.values(itemAvailability).filter(Boolean === false).length;
+  const missingCount = Object.values(itemAvailability).filter((v) => !v).length;
 
   // Step 2: submete a solicitação
   async function handleSubmit(data: Step2Data) {
     if (!invoice) return;
     setStep("SUBMITTING");
     setSubmitError(null);
+
+    // salva cotação definitiva (com isUrgent correto) antes de criar a solicitação
+    let freightQuoteId: string | undefined;
+    if (destCoords) {
+      const store = stores.find((s) => s.id === step1.getValues("storeId"));
+      if (store) {
+        try {
+          const address = `${invoice.deliveryAddress.street}, ${invoice.deliveryAddress.city}, ${invoice.deliveryAddress.state}`;
+          const quoteRes = await fetch("/api/frete/cotacao", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              storeId: store.id,
+              originAddress: store.name,
+              originLat: store.lat,
+              originLng: store.lng,
+              destAddress: address,
+              destLat: destCoords.lat,
+              destLng: destCoords.lng,
+              isUrgent: data.deliveryType === "URGENT",
+              save: true,
+            }),
+          });
+          const quoteJson = await quoteRes.json();
+          if (quoteRes.ok && quoteJson.success) {
+            freightQuoteId = quoteJson.data.quoteId;
+          }
+        } catch {
+          // continua sem quoteId
+        }
+      }
+    }
 
     const payload = {
       invoiceNumber: invoice.invoiceNumber,
@@ -118,6 +223,7 @@ export function NovaSolicitacaoForm({ stores, sessionStoreId }: Props) {
       chargedFreight: data.chargedFreight,
       isComplete: allAvailable,
       notes: data.notes,
+      freightQuoteId,
       itemsAvailability: invoice.items.map((item) => ({
         productCode: item.productCode,
         productName: item.productName,
@@ -136,6 +242,12 @@ export function NovaSolicitacaoForm({ stores, sessionStoreId }: Props) {
 
       const json = await res.json();
 
+      if (res.status === 409 && json.code === "DUPLICATE") {
+        setDuplicateId(json.details?.existingId ?? null);
+        setStep("DUPLICATE");
+        return;
+      }
+
       if (!res.ok || !json.success) {
         setSubmitError(json.error ?? "Erro ao criar solicitação");
         setStep("CONFIRM");
@@ -148,6 +260,53 @@ export function NovaSolicitacaoForm({ stores, sessionStoreId }: Props) {
       setSubmitError("Erro de conexão. Tente novamente.");
       setStep("CONFIRM");
     }
+  }
+
+  // ── TELA: DUPLICATE ──
+  if (step === "DUPLICATE") {
+    return (
+      <div className="bg-white rounded-xl border border-amber-200 p-8 text-center">
+        <div className="w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-4">
+          <AlertTriangle className="w-8 h-8 text-amber-600" />
+        </div>
+        <h2 className="text-xl font-bold text-gray-900 mb-2">Solicitação já existe</h2>
+        <p className="text-gray-500 text-sm mb-1">
+          Já existe uma solicitação de entrega para este pedido.
+        </p>
+        <p className="text-gray-400 text-xs mt-1">
+          Não é possível criar uma segunda solicitação para o mesmo número de pedido e loja.
+        </p>
+        <div className="mt-6 flex gap-3 justify-center">
+          <button
+            onClick={() => {
+              setStep("SEARCH");
+              setInvoice(null);
+              setDuplicateId(null);
+              step1.reset({ storeId: sessionStoreId });
+              step2.reset();
+            }}
+            className="px-5 py-2 border border-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 transition"
+          >
+            Voltar
+          </button>
+          {duplicateId ? (
+            <button
+              onClick={() => router.push(`/solicitacoes/${duplicateId}`)}
+              className="px-5 py-2 bg-amber-500 text-white rounded-lg text-sm font-medium hover:bg-amber-600 transition"
+            >
+              Ver solicitação existente
+            </button>
+          ) : (
+            <button
+              onClick={() => router.push("/solicitacoes")}
+              className="px-5 py-2 bg-amber-500 text-white rounded-lg text-sm font-medium hover:bg-amber-600 transition"
+            >
+              Ver solicitações
+            </button>
+          )}
+        </div>
+      </div>
+    );
   }
 
   // ── TELA: DONE ──
@@ -407,17 +566,31 @@ export function NovaSolicitacaoForm({ stores, sessionStoreId }: Props) {
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">
                   Frete cobrado do cliente (R$)
                 </label>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  {...step2.register("chargedFreight", { valueAsNumber: true })}
-                  placeholder="0,00"
-                  className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
-                />
-                {suggestedFreight !== null && (
-                  <p className="text-xs text-gray-400 mt-1">
-                    Sugerido: {formatCurrency(suggestedFreight)}
+                <div className="relative">
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    {...step2.register("chargedFreight", { valueAsNumber: true })}
+                    placeholder="0,00"
+                    disabled={freightLoading}
+                    className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 disabled:bg-gray-50"
+                  />
+                  {freightLoading && (
+                    <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                      <Loader2 className="w-4 h-4 text-gray-400 animate-spin" />
+                    </div>
+                  )}
+                </div>
+                {freightLoading && (
+                  <p className="text-xs text-gray-400 mt-1 flex items-center gap-1">
+                    <TrendingUp className="w-3 h-3" /> Calculando frete sugerido...
+                  </p>
+                )}
+                {!freightLoading && suggestedFreight !== null && (
+                  <p className="text-xs text-gray-500 mt-1 flex items-center gap-1">
+                    <TrendingUp className="w-3 h-3 text-orange-400" />
+                    Sugerido pelo motor: <strong className="text-gray-800">{formatCurrency(suggestedFreight)}</strong>
                   </p>
                 )}
                 {step2.formState.errors.chargedFreight && (

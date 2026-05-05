@@ -13,7 +13,7 @@
 // ──────────────────────────────────────────────
 
 import { prisma } from "@/lib/prisma";
-import { StockLedgerEntryType, DivergenceStatus } from "@prisma/client";
+import { StockLedgerEntryType, DivergenceStatus, TransferStatus, ResolutionType } from "@prisma/client";
 import {
   getSaldoDisponivel,
   fetchEstoqueCitelBatch,
@@ -55,6 +55,66 @@ async function getOrCreateLedger(
 // 3. Incrementa qtdComprometida com lock otimista (version)
 // 4. Se Citel indisponível: usa qtdFisica do ledger como fallback
 // ──────────────────────────────────────────────
+
+// ──────────────────────────────────────────────
+// PRE-CHECK — leitura somente; não altera nada no ledger
+//
+// Verifica se há saldo suficiente antes de criar a transferência.
+// Mesma lógica de commitStock (Citel → fallback qtdFisica), mas sem commit.
+// ──────────────────────────────────────────────
+
+export async function preCheckStock(input: {
+  storeId: string;
+  productCode: string;
+  productName: string;
+  qty: number;
+}): Promise<{
+  ok: boolean;
+  error?: "INSUFFICIENT_STOCK" | "CITEL_UNAVAILABLE";
+  detail?: {
+    saldoDisponivelCitel: number;
+    qtdComprometida: number;
+    saldoDisponivelReal: number;
+    qtdSolicitada: number;
+  };
+}> {
+  const store = await prisma.store.findUnique({
+    where: { id: input.storeId },
+    select: { codigoEmpresaCitel: true },
+  });
+
+  const codigoEmpresaCitel = store?.codigoEmpresaCitel ?? null;
+
+  let saldoDisponivelCitel: number | null = null;
+  if (codigoEmpresaCitel && isCitelConfigured()) {
+    const citel = await getSaldoDisponivel(input.productCode, codigoEmpresaCitel);
+    saldoDisponivelCitel = citel?.saldoDisponivel ?? null;
+  }
+
+  const ledger = await prisma.stockLedger.findUnique({
+    where: { storeId_productCode: { storeId: input.storeId, productCode: input.productCode } },
+    select: { qtdFisica: true, qtdComprometida: true },
+  });
+
+  const qtdComprometida = ledger?.qtdComprometida ?? 0;
+  const saldoBase = saldoDisponivelCitel !== null ? saldoDisponivelCitel : (ledger?.qtdFisica ?? 0);
+  const saldoDisponivelReal = saldoBase - qtdComprometida;
+
+  if (saldoDisponivelReal < input.qty) {
+    return {
+      ok: false,
+      error: saldoDisponivelCitel === null ? "CITEL_UNAVAILABLE" : "INSUFFICIENT_STOCK",
+      detail: {
+        saldoDisponivelCitel: saldoBase,
+        qtdComprometida,
+        saldoDisponivelReal,
+        qtdSolicitada: input.qty,
+      },
+    };
+  }
+
+  return { ok: true };
+}
 
 export async function commitStock(
   input: StockCommitInput
@@ -268,6 +328,50 @@ export async function markInTransit(input: {
 }
 
 // ──────────────────────────────────────────────
+// CANCEL TRANSIT — chamado ao cancelar após APPROVED
+// Decrementa qtdEmTransito na loja destino
+// ──────────────────────────────────────────────
+
+export async function cancelTransit(input: {
+  toStoreId: string;
+  productCode: string;
+  qty: number;
+  transferId: string;
+  operatorId?: string;
+}): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    const ledger = await (tx as typeof prisma).stockLedger.findUnique({
+      where: { storeId_productCode: { storeId: input.toStoreId, productCode: input.productCode } },
+    });
+
+    if (!ledger || ledger.qtdEmTransito <= 0) return;
+
+    const decrementQty = Math.min(input.qty, ledger.qtdEmTransito);
+
+    await (tx as typeof prisma).stockLedger.update({
+      where: { id: ledger.id },
+      data: {
+        qtdEmTransito: { decrement: decrementQty },
+        version: { increment: 1 },
+      },
+    });
+
+    await (tx as typeof prisma).stockLedgerEntry.create({
+      data: {
+        ledgerId: ledger.id,
+        type: StockLedgerEntryType.TRANSIT_CANCEL,
+        qty: decrementQty,
+        field: "qtdEmTransito",
+        referenceId: input.transferId,
+        referenceType: "transfer",
+        createdById: input.operatorId,
+        notes: "Trânsito cancelado",
+      },
+    });
+  });
+}
+
+// ──────────────────────────────────────────────
 // RECONCILE — chamado ao receber transferência (RECEIVED)
 //
 // - Baixa qtdEmTransito na loja destino
@@ -335,7 +439,9 @@ export async function reconcileTransfer(
               sentQty: item.sentQty,
               receivedQty: item.receivedQty,
               divergenceQty,
-              status: DivergenceStatus.PENDING,
+              status: DivergenceStatus.PENDING_RESOLUTION,
+              responsibleStoreId: input.receivingStoreId,
+              deadline: new Date(Date.now() + 24 * 60 * 60 * 1000),
             },
           });
         }
@@ -357,6 +463,11 @@ export async function reconcileTransfer(
 
 // ──────────────────────────────────────────────
 // RESOLVE DIVERGENCE — operador justifica e fecha
+//
+// Após resolver, verifica se todas as divergências da transferência
+// foram encerradas (RESOLVED ou VOIDED). Se sim:
+//   1. Limpa transfer.hasDivergence
+//   2. Verifica se a solicitação vinculada pode avançar para READY
 // ──────────────────────────────────────────────
 
 export async function resolveDivergence(
@@ -365,41 +476,120 @@ export async function resolveDivergence(
   await prisma.$transaction(async (tx) => {
     const div = await (tx as typeof prisma).transferDivergence.findUniqueOrThrow({
       where: { id: input.divergenceId },
+      select: {
+        ledgerId: true,
+        transferId: true,
+        divergenceQty: true,
+        transfer: { select: { deliveryRequestId: true } },
+      },
     });
 
-    if (input.adjustLedger && Math.abs(div.divergenceQty) > 0.001) {
-      // divergenceQty positivo = faltou produto → reduz qtdFisica no destino
-      await (tx as typeof prisma).stockLedger.update({
-        where: { id: div.ledgerId },
-        data: {
-          qtdFisica: { decrement: div.divergenceQty },
-          version: { increment: 1 },
-        },
-      });
+    // Valida consistência entre resolutionType e sinal de divergenceQty antes de qualquer escrita
+    if (input.resolutionType === ResolutionType.MISSING_PRODUCT && div.divergenceQty <= 0) {
+      console.error(
+        `[resolveDivergence] MISSING_PRODUCT inválido: divergenceQty=${div.divergenceQty} divergenceId=${input.divergenceId}`
+      );
+      throw new Error(
+        "Esta divergência indica que chegou produto a mais, não falta. Verifique o tipo de resolução."
+      );
+    }
+    if (input.resolutionType === ResolutionType.EXTRA_PRODUCT && div.divergenceQty >= 0) {
+      console.error(
+        `[resolveDivergence] EXTRA_PRODUCT inválido: divergenceQty=${div.divergenceQty} divergenceId=${input.divergenceId}`
+      );
+      throw new Error(
+        "Esta divergência indica que faltou produto, não excesso. Verifique o tipo de resolução."
+      );
+    }
 
-      await (tx as typeof prisma).stockLedgerEntry.create({
-        data: {
-          ledgerId: div.ledgerId,
-          type: StockLedgerEntryType.DIVERGENCE_ADJ,
-          qty: -div.divergenceQty,
-          field: "qtdFisica",
-          referenceId: div.transferId,
-          referenceType: "transfer",
-          notes: input.resolution,
-          createdById: input.resolvedById,
-        },
-      });
+    if (input.resolutionType !== ResolutionType.OPERATIONAL_ERROR && Math.abs(div.divergenceQty) > 0.001) {
+      if (input.resolutionType === ResolutionType.MISSING_PRODUCT) {
+        // Produto não chegou → decrementa qtdFisica no destino (faltou divergenceQty unidades)
+        await (tx as typeof prisma).stockLedger.update({
+          where: { id: div.ledgerId },
+          data: { qtdFisica: { decrement: div.divergenceQty }, version: { increment: 1 } },
+        });
+        await (tx as typeof prisma).stockLedgerEntry.create({
+          data: {
+            ledgerId: div.ledgerId,
+            type: StockLedgerEntryType.DIVERGENCE_ADJ,
+            qty: -div.divergenceQty,
+            field: "qtdFisica",
+            referenceId: div.transferId,
+            referenceType: "transfer",
+            notes: `[MISSING_PRODUCT] ${input.resolution}`,
+            createdById: input.resolvedById,
+          },
+        });
+      } else if (input.resolutionType === ResolutionType.EXTRA_PRODUCT) {
+        // Produto a mais chegou → incrementa qtdFisica no destino (divergenceQty é negativo)
+        const extraQty = Math.abs(div.divergenceQty);
+        await (tx as typeof prisma).stockLedger.update({
+          where: { id: div.ledgerId },
+          data: { qtdFisica: { increment: extraQty }, version: { increment: 1 } },
+        });
+        await (tx as typeof prisma).stockLedgerEntry.create({
+          data: {
+            ledgerId: div.ledgerId,
+            type: StockLedgerEntryType.DIVERGENCE_ADJ,
+            qty: extraQty,
+            field: "qtdFisica",
+            referenceId: div.transferId,
+            referenceType: "transfer",
+            notes: `[EXTRA_PRODUCT] ${input.resolution}`,
+            createdById: input.resolvedById,
+          },
+        });
+      }
     }
 
     await (tx as typeof prisma).transferDivergence.update({
       where: { id: input.divergenceId },
       data: {
         status: DivergenceStatus.RESOLVED,
+        resolutionType: input.resolutionType,
         resolution: input.resolution,
         resolvedById: input.resolvedById,
         resolvedAt: new Date(),
       },
     });
+
+    // Verifica se ainda há divergências pendentes nesta transferência
+    const pendingCount = await (tx as typeof prisma).transferDivergence.count({
+      where: {
+        transferId: div.transferId,
+        status: DivergenceStatus.PENDING_RESOLUTION,
+        id: { not: input.divergenceId },
+      },
+    });
+
+    if (pendingCount === 0) {
+      // Libera o bloqueio da transferência
+      await (tx as typeof prisma).transfer.update({
+        where: { id: div.transferId },
+        data: { hasDivergence: false },
+      });
+
+      // Verifica se a solicitação vinculada pode avançar para READY
+      const { deliveryRequestId } = div.transfer;
+      if (deliveryRequestId) {
+        const transfers = await (tx as typeof prisma).transfer.findMany({
+          where: { deliveryRequestId },
+          select: { status: true, hasDivergence: true },
+        });
+
+        const allClear = transfers.every(
+          (t) => t.status === TransferStatus.RECEIVED && !t.hasDivergence
+        );
+
+        if (allClear) {
+          await (tx as typeof prisma).deliveryRequest.update({
+            where: { id: deliveryRequestId },
+            data: { status: "READY", isComplete: true },
+          });
+        }
+      }
+    }
   });
 }
 
@@ -468,6 +658,16 @@ export async function syncFromCitel(
     });
 
     result.synced++;
+  }
+
+  // Recalcula coverageDaysActual após sync de estoque
+  if (result.synced > 0) {
+    try {
+      const { calculateCoverageForStore } = await import("./torre/coverage.service");
+      await calculateCoverageForStore(storeId);
+    } catch {
+      // falha silenciosa — cobertura recalculada no próximo sync
+    }
   }
 
   return result;

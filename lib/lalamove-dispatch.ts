@@ -77,6 +77,7 @@ export async function dispatchViaLalamove(
   if (!stops) return null;
 
   const quote = await getLalamoveQuote(stops.origin, stops.destination);
+  if ("reason" in quote) return null;
 
   const order = await createLalamoveOrder(
     quote.quotationId,
@@ -84,6 +85,7 @@ export async function dispatchViaLalamove(
     stops.destination,
     store.phone ?? ""
   );
+  if ("reason" in order) return null;
 
   return {
     lalamoveOrderId: order.orderId,

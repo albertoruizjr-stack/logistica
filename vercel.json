@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/vincular-nf",
+      "schedule": "*/15 * * * *"
+    }
+  ]
+}

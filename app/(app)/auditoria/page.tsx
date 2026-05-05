@@ -7,6 +7,7 @@ import {
   AlertCircle, BarChart3,
 } from "lucide-react";
 import { formatCurrency, cn } from "@/lib/utils";
+import { PageHeader } from "@/components/ui";
 
 // ──────────────────────────────────────────────
 // TIPOS
@@ -238,19 +239,17 @@ export default function AuditoriaPage() {
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
-      <div className="mb-6">
-        <div className="flex items-center gap-2">
-          <h1 className="text-2xl font-bold text-gray-900">Auditoria de Frete</h1>
-          {kpis?.audit.pendingJustifications ? (
+      <PageHeader
+        title="Auditoria de Frete"
+        description="Controle de desvio entre frete sugerido e cobrado — últimos 30 dias"
+        actions={
+          kpis?.audit.pendingJustifications ? (
             <span className="bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full animate-pulse">
               {kpis.audit.pendingJustifications} pendente{kpis.audit.pendingJustifications > 1 ? "s" : ""}
             </span>
-          ) : null}
-        </div>
-        <p className="text-gray-500 text-sm mt-1">
-          Controle de desvio entre frete sugerido e cobrado — últimos 30 dias
-        </p>
-      </div>
+          ) : undefined
+        }
+      />
 
       {/* KPIs */}
       {kpis && (

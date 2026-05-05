@@ -4,8 +4,9 @@ import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { Loader2, Calculator, AlertCircle, CheckCircle2, Clock, Zap, Truck, MapPin, Search } from "lucide-react";
+import { Loader2, Calculator, AlertCircle, CheckCircle2, Clock, Zap, Truck, MapPin, Search, Package } from "lucide-react";
 import { cn, formatCurrency, formatDistance } from "@/lib/utils";
+import { SolicitarEntregaDrawer } from "@/components/cotacao/solicitar-entrega-drawer";
 
 const schema = z.object({
   storeId: z.string().min(1, "Selecione a loja de origem"),
@@ -54,6 +55,9 @@ export function FreightQuoteForm({ stores, sessionStoreId }: Props) {
   const [geocoding, setGeocoding] = useState(false);
   const [geocodedAddress, setGeocodedAddress] = useState<string | null>(null);
   const [geocodeError, setGeocodeError] = useState<string | null>(null);
+  const [savingQuote, setSavingQuote] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [savedQuote, setSavedQuote] = useState<{ id: string } | null>(null);
 
   const {
     register,
@@ -102,6 +106,36 @@ export function FreightQuoteForm({ stores, sessionStoreId }: Props) {
       setGeocodeError("Erro de conexão ao buscar localização");
     } finally {
       setGeocoding(false);
+    }
+  }
+
+  async function handleSolicitarEntrega() {
+    if (!result || result.underConsultation) return;
+    setSavingQuote(true);
+    try {
+      const selectedStore = stores.find((s) => s.id === watch("storeId"));
+      const res = await fetch("/api/frete/cotacao", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          storeId: watch("storeId"),
+          originAddress: selectedStore?.address ?? "",
+          originLat: selectedStore?.lat ?? 0,
+          originLng: selectedStore?.lng ?? 0,
+          destAddress: watch("destAddress"),
+          destLat: watch("destLat"),
+          destLng: watch("destLng"),
+          isUrgent: watch("isUrgent"),
+          save: true,
+        }),
+      });
+      const json = await res.json();
+      if (res.ok && json.data?.quoteId) {
+        setSavedQuote({ id: json.data.quoteId });
+        setDrawerOpen(true);
+      }
+    } finally {
+      setSavingQuote(false);
     }
   }
 
@@ -298,6 +332,19 @@ export function FreightQuoteForm({ stores, sessionStoreId }: Props) {
         </div>
       )}
 
+      {savedQuote && result && (
+        <SolicitarEntregaDrawer
+          open={drawerOpen}
+          onClose={() => setDrawerOpen(false)}
+          freightQuoteId={savedQuote.id}
+          storeId={watch("storeId")}
+          stores={stores}
+          suggestedPrice={result.suggestedPrice}
+          isUrgent={result.isUrgent}
+          destAddress={watch("destAddress")}
+        />
+      )}
+
       {result && (
         <div className="mt-5">
           {result.underConsultation ? (
@@ -387,6 +434,22 @@ export function FreightQuoteForm({ stores, sessionStoreId }: Props) {
                 {result.isUrgent ? <Zap className="w-3 h-3" /> : <Truck className="w-3 h-3" />}
                 {result.isUrgent ? "Urgente — via Lalamove" : "Padrão — rota interna"}
               </div>
+
+              {/* CTA principal */}
+              <button
+                type="button"
+                onClick={handleSolicitarEntrega}
+                disabled={savingQuote}
+                className="mt-5 w-full flex items-center justify-center gap-2 py-3 rounded-xl text-[14px] font-bold text-white transition-opacity disabled:opacity-60"
+                style={{ backgroundColor: "var(--color-primary)", boxShadow: "0 2px 8px rgba(249,115,22,0.3)" }}
+              >
+                {savingQuote ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Package className="w-4 h-4" />
+                )}
+                {savingQuote ? "Salvando cotação..." : "Solicitar Entrega"}
+              </button>
             </div>
           )}
         </div>

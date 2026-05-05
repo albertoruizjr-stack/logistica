@@ -26,13 +26,28 @@ export function Card({
   className,
 }: CardProps) {
   return (
-    <div className={cn("bg-white rounded-lg border border-slate-200 shadow-sm", className)}>
+    <div
+      className={cn("bg-white rounded-xl", className)}
+      style={{ border: "1px solid var(--color-border)" }}
+    >
       {(title || actions) && (
-        <div className="flex items-start justify-between px-4 py-3 border-b border-slate-200">
+        <div
+          className="flex items-start justify-between px-4 py-3 border-b"
+          style={{ borderColor: "var(--color-border)" }}
+        >
           <div>
-            {title && <p className="text-sm font-semibold text-slate-900">{title}</p>}
+            {title && (
+              <p
+                className="text-[13px] font-semibold"
+                style={{ color: "var(--color-body-text)", fontFamily: "var(--font-display)" }}
+              >
+                {title}
+              </p>
+            )}
             {description && (
-              <p className="text-xs text-slate-500 mt-0.5">{description}</p>
+              <p className="text-xs mt-0.5" style={{ color: "var(--color-muted-text)" }}>
+                {description}
+              </p>
             )}
           </div>
           {actions && (
@@ -43,9 +58,9 @@ export function Card({
       <div className={paddingMap[padding]}>
         {loading ? (
           <div className="space-y-3 animate-pulse">
-            <div className="h-4 bg-slate-100 rounded w-full" />
-            <div className="h-4 bg-slate-100 rounded w-3/4" />
-            <div className="h-4 bg-slate-100 rounded w-1/2" />
+            <div className="h-4 rounded-lg w-full" style={{ backgroundColor: "#EBEBEB" }} />
+            <div className="h-4 rounded-lg w-3/4" style={{ backgroundColor: "#EBEBEB" }} />
+            <div className="h-4 rounded-lg w-1/2" style={{ backgroundColor: "#EBEBEB" }} />
           </div>
         ) : (
           children

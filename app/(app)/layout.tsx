@@ -33,7 +33,7 @@ export default async function AppLayout({
   const storeCode = store?.code ?? "";
 
   return (
-    <div className="flex h-screen overflow-hidden bg-slate-50">
+    <div className="flex h-screen overflow-hidden" style={{ backgroundColor: "var(--color-background)" }}>
       <Sidebar
         userRole={session.role}
         userName={session.name}

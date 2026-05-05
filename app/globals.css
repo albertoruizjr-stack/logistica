@@ -1,46 +1,51 @@
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
   :root {
-    /* ── shadcn/ui primitives (necessários para componentes Radix) ── */
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    /* ── shadcn/ui primitives ── */
+    --background: 45 18% 97%;
+    --foreground: 240 5% 10%;
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card-foreground: 240 5% 10%;
     --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
+    --popover-foreground: 240 5% 10%;
     --primary: 24 95% 53%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
+    --secondary: 40 8% 93%;
+    --secondary-foreground: 240 5% 20%;
+    --muted: 40 8% 93%;
+    --muted-foreground: 240 4% 46%;
+    --accent: 40 8% 93%;
+    --accent-foreground: 240 5% 20%;
     --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 40 10% 87%;
+    --input: 40 10% 87%;
     --ring: 24 95% 53%;
-    --radius: 0.5rem;
+    --radius: 0.625rem;
 
-    /* ── Design System tokens ── */
-    --color-primary:       #f97316;
-    --color-primary-dark:  #ea580c;
-    --color-primary-light: #fff7ed;
-    --color-surface:       #ffffff;
-    --color-background:    #f8fafc;
-    --color-border:        #e2e8f0;
-    --color-sidebar-bg:    #0f172a;
-    --color-urgent:        #c2410c;
-    --color-danger:        #dc2626;
-    --color-warning:       #d97706;
-    --color-in-transit:    #0891b2;
-    --color-success:       #16a34a;
-    --color-muted-text:    #64748b;
-    --color-body-text:     #1e293b;
+    /* ── Design tokens ── */
+    --color-primary:       #F97316;
+    --color-primary-dark:  #EA580C;
+    --color-primary-light: #FFF7ED;
+    --color-surface:       #FFFFFF;
+    --color-background:    #F5F4F0;
+    --color-border:        #E6E3DC;
+    --color-sidebar-bg:    #111111;
+    --color-urgent:        #C2410C;
+    --color-danger:        #DC2626;
+    --color-warning:       #D97706;
+    --color-in-transit:    #0891B2;
+    --color-success:       #16A34A;
+    --color-muted-text:    #737373;
+    --color-body-text:     #1C1C1C;
+
+    --font-display: 'Syne', system-ui, sans-serif;
+    --font-body:    'DM Sans', system-ui, sans-serif;
   }
 }
 
@@ -48,8 +53,20 @@
   * {
     @apply border-border;
   }
+
+  html {
+    font-family: var(--font-body);
+  }
+
   body {
-    @apply bg-background text-foreground;
+    font-family: var(--font-body);
     background-color: var(--color-background);
+    color: var(--color-body-text);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  h1, h2, h3, h4 {
+    font-family: var(--font-display);
   }
 }

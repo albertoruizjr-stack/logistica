@@ -93,9 +93,121 @@ enum StockLedgerEntryType {
 }
 
 enum DivergenceStatus {
-  PENDING   // registrada, aguardando resolução do operador
-  RESOLVED  // resolvida — estoque ajustado e justificado
-  VOIDED    // anulada (erro de registro)
+  PENDING_RESOLUTION  // registrada, aguardando resolução do operador (prazo 24h)
+  RESOLVED            // resolvida — estoque ajustado e justificado
+  VOIDED              // anulada (erro de registro)
+}
+
+enum ResolutionType {
+  MISSING_PRODUCT   // produto não chegou — ajusta qtdFisica (decremento) + flag reposição
+  EXTRA_PRODUCT     // produto a mais chegou — ajusta qtdFisica (incremento)
+  OPERATIONAL_ERROR // erro de registro — não altera estoque, apenas justificativa
+}
+
+enum AbcClassificationValue {
+  A
+  B
+  C
+}
+
+enum DataConfidence {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum SyncJobType {
+  STOCK
+  TRANSFERS
+  SALES
+  PURCHASES
+  HISTORY
+  ABC
+}
+
+enum SyncJobTier {
+  FAST_CRITICAL
+  FAST_STANDARD
+  MEDIUM
+  SLOW
+}
+
+enum SyncJobStatus {
+  RUNNING
+  SUCCESS
+  PARTIAL
+  FAILED
+}
+
+enum SyncJobSource {
+  API
+  CSV
+  MANUAL
+}
+
+enum AlertType {
+  RUPTURA_REDE_SEM_ESTOQUE
+  RUPTURA_TRANSFERENCIA_POSSIVEL
+  ALERTA_SKU_B
+  ABAIXO_MINIMO
+  EXCESSO_SUGESTAO
+  VENDA_SEM_COBERTURA
+  COBERTURA_EM_RISCO
+  ENTREGA_DIA_SEGUINTE
+  TRANSFER_VENCIDA
+  NF_SEM_RECEBIMENTO
+  DIVERGENCIA_TRANSFERENCIA
+  PEDIDO_COMPRA_VENCIDO
+  ITEM_CRITICO_SEM_FATURAR
+  FOLLOWUP_VENCIDO
+  DIVERGENCIA_COMPRA
+}
+
+enum AlertSeverity {
+  CRITICAL
+  WARNING
+  INFO
+}
+
+enum AlertStatus {
+  PENDING
+  IN_PROGRESS
+  RESOLVED
+  CANCELLED
+  SNOOZED
+  NEEDS_MANUAL_CONFIRMATION
+  CRITICAL_UNRESOLVED
+}
+
+enum AlertSlaStatus {
+  ON_TRACK
+  AT_RISK
+  OVERDUE
+}
+
+enum AlertActionType {
+  CREATE_TRANSFER
+  PLACE_PURCHASE_ORDER
+  CONFIRM_RECEIPT
+  RESOLVE_DIVERGENCE
+  CONTACT_SUPPLIER
+  LINK_COVERAGE
+  REVIEW_STOCK
+  INFO_ONLY
+}
+
+enum AlertEscalationLevel {
+  L1
+  L2
+  L3
+}
+
+enum AlertResolutionType {
+  TRANSFER
+  PURCHASE
+  MANUAL_FIX
+  CANCELLED
+  AUTO_RESOLVED
 }
 
 // ──────────────────────────────────────────────
@@ -117,15 +229,20 @@ model Store {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  users             User[]
-  deliveryRequests  DeliveryRequest[]
-  freightQuotes     FreightQuote[]
-  transfersFrom     Transfer[]        @relation("TransferFrom")
-  transfersTo       Transfer[]        @relation("TransferTo")
-  dispatches        Dispatch[]
-  drivers           Driver[]
-  auditConfigs      AuditConfig[]
-  stockLedgers      StockLedger[]
+  users                  User[]
+  deliveryRequests       DeliveryRequest[]    @relation("StoreDeliveries")
+  orderRequests          DeliveryRequest[]    @relation("OrderStoreDeliveries")
+  invoiceRequests        DeliveryRequest[]    @relation("InvoiceStoreDeliveries")
+  freightQuotes          FreightQuote[]
+  transfersFrom          Transfer[]           @relation("TransferFrom")
+  transfersTo            Transfer[]           @relation("TransferTo")
+  dispatches             Dispatch[]
+  drivers                Driver[]
+  auditConfigs           AuditConfig[]
+  stockLedgers           StockLedger[]
+  divergencesResponsible TransferDivergence[] @relation("DivergenceResponsibleStore")
+  abcClassifications     AbcClassification[]
+  controlTowerAlerts     ControlTowerAlert[]
 
   @@map("stores")
 }
@@ -154,6 +271,7 @@ model User {
   auditJustifications  FreightAudit[]       @relation("AuditJustifiedBy")
   auditSales           FreightAudit[]       @relation("AuditSeller")
   divergencesResolved  TransferDivergence[] @relation("DivergenceResolvedBy")
+  alertsOwned          ControlTowerAlert[] @relation("AlertOwner")
 
   @@map("users")
 }
@@ -218,33 +336,49 @@ model FreightQuote {
 
 model DeliveryRequest {
   id              String                @id @default(cuid())
-  invoiceNumber   String                @unique
-  storeId         String
+
+  // Identificação pelo Pedido (PD) — fluxo principal
+  orderNumber     String?               // número do PD no ERP
+  orderStoreId    String?               // loja que gerou o PD
+  // NF vinculada depois, quando emitida pelo CD
+  invoiceNumber   String?               // NF — preenchida após emissão
+  invoiceStoreId  String?               // loja emissora da NF (geralmente CD/132)
+
+  storeId         String                // loja que fez a solicitação
   sellerId        String
-  // dados do cliente vindos do ERP
+  // dados do destinatário (sempre preenchidos pelo vendedor)
   customerId      String?
   customerName    String
   customerPhone   String?
-  customerDoc     String?  // CPF/CNPJ
+  customerDoc     String?
   // endereço de entrega
   deliveryAddress String
   deliveryComplement String?
   deliveryCity    String?
   deliveryLat     Float?
   deliveryLng     Float?
+  // janela de entrega
+  deliveryWindowStart String?           // ex: "08:00"
+  deliveryWindowEnd   String?           // ex: "12:00"
   // controle
   status          DeliveryRequestStatus @default(PENDING)
   deliveryType    DeliveryType          @default(STANDARD)
-  isComplete      Boolean               @default(false) // todos os itens disponíveis?
+  isComplete      Boolean               @default(false)
   freightQuoteId  String?               @unique
-  chargedFreight  Float?   // valor cobrado do cliente pelo vendedor
-  totalValue      Float?   // valor total da NF
+  chargedFreight  Float?
+  totalValue      Float?
   notes           String?
-  scheduledFor    DateTime?  // quando deve ser entregue
-  createdAt       DateTime   @default(now())
-  updatedAt       DateTime   @updatedAt
+  scheduledFor    DateTime?
+  // rastreio de tentativas de vínculo automático PD → NF
+  nfLinkLastAttemptAt DateTime?         // quando foi a última tentativa
+  nfLinkAttemptCount  Int      @default(0) // quantas tentativas já foram feitas
+  nfLinkError         String?            // PARTIAL_BILLING | MULTIPLE_NF | API_ERROR
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
 
-  store        Store          @relation(fields: [storeId], references: [id])
+  store        Store          @relation("StoreDeliveries",      fields: [storeId],        references: [id])
+  orderStore   Store?         @relation("OrderStoreDeliveries", fields: [orderStoreId],   references: [id])
+  invoiceStore Store?         @relation("InvoiceStoreDeliveries", fields: [invoiceStoreId], references: [id])
   seller       User           @relation(fields: [sellerId], references: [id])
   freightQuote FreightQuote?  @relation(fields: [freightQuoteId], references: [id])
   items        DeliveryItem[]
@@ -252,6 +386,7 @@ model DeliveryRequest {
   dispatch     Dispatch?
   audit        FreightAudit?
 
+  @@unique([orderNumber, orderStoreId])
   @@map("delivery_requests")
 }
 
@@ -695,26 +830,30 @@ model StockLedgerEntry {
 // ──────────────────────────────────────────────
 
 model TransferDivergence {
-  id             String           @id @default(cuid())
-  transferId     String
-  transferItemId String
-  ledgerId       String           // ledger da loja destino (onde o estoque chega)
-  productCode    String
-  productName    String
-  sentQty        Float
-  receivedQty    Float
-  divergenceQty  Float            // sentQty - receivedQty (positivo = faltou, negativo = sobrou)
-  status         DivergenceStatus @default(PENDING)
-  resolution     String?          // descrição da resolução pelo operador
-  resolvedById   String?
-  resolvedAt     DateTime?
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime         @updatedAt
+  id                  String           @id @default(cuid())
+  transferId          String
+  transferItemId      String
+  ledgerId            String           // ledger da loja destino (onde o estoque chega)
+  productCode         String
+  productName         String
+  sentQty             Float
+  receivedQty         Float
+  divergenceQty       Float            // sentQty - receivedQty (positivo = faltou, negativo = sobrou)
+  status              DivergenceStatus @default(PENDING_RESOLUTION)
+  responsibleStoreId  String           // loja responsável pela resolução (padrão: destino)
+  deadline            DateTime         // prazo para resolução (padrão: 24h após criação)
+  resolutionType      ResolutionType?  // obrigatório ao resolver; null enquanto PENDING_RESOLUTION
+  resolution          String?          // descrição da resolução pelo operador
+  resolvedById        String?
+  resolvedAt          DateTime?
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
 
-  transfer     Transfer     @relation(fields: [transferId], references: [id])
-  transferItem TransferItem @relation(fields: [transferItemId], references: [id])
-  ledger       StockLedger  @relation(fields: [ledgerId], references: [id])
-  resolvedBy   User?        @relation("DivergenceResolvedBy", fields: [resolvedById], references: [id])
+  transfer          Transfer     @relation(fields: [transferId], references: [id])
+  transferItem      TransferItem @relation(fields: [transferItemId], references: [id])
+  ledger            StockLedger  @relation(fields: [ledgerId], references: [id])
+  responsibleStore  Store        @relation("DivergenceResponsibleStore", fields: [responsibleStoreId], references: [id])
+  resolvedBy        User?        @relation("DivergenceResolvedBy", fields: [resolvedById], references: [id])
 
   @@map("transfer_divergences")
 }
@@ -743,4 +882,141 @@ model FreightDecisionLog {
   createdAt         DateTime @default(now())
 
   @@map("freight_decision_logs")
+}
+
+model AbcClassification {
+  id                 String                 @id @default(cuid())
+  storeId            String
+  productCode        String
+  productName        String
+  classification     AbcClassificationValue
+  source             String                 @default("MANUAL")
+  isManualOverride   Boolean                @default(false)
+  minStock           Float?
+  maxStock           Float?
+  coverageDaysTarget Int                    @default(30)
+  avgDailySales      Float?
+  coverageDaysActual Float?
+  coverageUpdatedAt  DateTime?
+  calculatedAt       DateTime?
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id])
+
+  @@unique([storeId, productCode])
+  @@index([storeId])
+  @@map("abc_classifications")
+}
+
+model CitelSyncJob {
+  id               String         @id @default(cuid())
+  type             SyncJobType
+  tier             SyncJobTier
+  status           SyncJobStatus  @default(RUNNING)
+  source           SyncJobSource  @default(API)
+  dataConfidence   DataConfidence @default(HIGH)
+  recordsProcessed Int            @default(0)
+  errors           Int            @default(0)
+  startedAt        DateTime       @default(now())
+  finishedAt       DateTime?
+  errorDetail      String?
+
+  @@index([type, status])
+  @@index([type, startedAt])
+  @@map("citel_sync_jobs")
+}
+
+model ControlTowerAlert {
+  id                 String                @id @default(cuid())
+  type               AlertType
+  severity           AlertSeverity
+  storeId            String
+  ownerId            String
+  notifiedUserIds    String[]
+  actionType         AlertActionType
+  slaDeadline        DateTime
+  slaStatus          AlertSlaStatus        @default(ON_TRACK)
+  status             AlertStatus           @default(PENDING)
+  escalationLevel    AlertEscalationLevel?
+  escalatedAt        DateTime?
+  escalatedToId      String?
+  groupKey           String
+  suppressedBy       String?
+  suppressedAt       DateTime?
+  resolvedById       String?
+  resolvedAt         DateTime?
+  resolutionType     AlertResolutionType?
+  resolutionNotes    String?
+  resolution         String?
+  revalidatedAt      DateTime?
+  revalidationResult String?
+  dataConfidence     DataConfidence        @default(HIGH)
+  whatsappSentAt     DateTime?
+  snoozedUntil       DateTime?
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+
+  store Store                   @relation(fields: [storeId], references: [id])
+  owner User                    @relation("AlertOwner", fields: [ownerId], references: [id])
+  items ControlTowerAlertItem[]
+
+  @@index([storeId, status])
+  @@index([groupKey])
+  @@index([severity, status])
+  @@index([slaDeadline])
+  @@map("control_tower_alerts")
+}
+
+model ControlTowerAlertItem {
+  id                     String                  @id @default(cuid())
+  alertId                String
+  productCode            String
+  productName            String
+  abcClassification      AbcClassificationValue?
+  metricValue            Float
+  metricUnit             String
+  suggestedSourceStoreId String?
+  suggestedSourceQty     Float?
+  detail                 Json                    @default("{}")
+  createdAt              DateTime                @default(now())
+
+  alert ControlTowerAlert @relation(fields: [alertId], references: [id], onDelete: Cascade)
+
+  @@index([alertId])
+  @@map("control_tower_alert_items")
+}
+
+// ──────────────────────────────────────────────
+// JOB DE VÍNCULO AUTOMÁTICO PD → NF
+// ──────────────────────────────────────────────
+
+enum NfLinkJobStatus {
+  RUNNING
+  SUCCESS
+  PARTIAL
+  FAILED
+}
+
+enum NfLinkJobTrigger {
+  CRON
+  MANUAL
+}
+
+model NfLinkJob {
+  id               String           @id @default(cuid())
+  status           NfLinkJobStatus  @default(RUNNING)
+  trigger          NfLinkJobTrigger @default(CRON)
+  requestsChecked  Int              @default(0)  // solicitações avaliadas
+  requestsLinked   Int              @default(0)  // NFs vinculadas com sucesso
+  requestsPartial  Int              @default(0)  // faturamento parcial encontrado
+  requestsMultiNf  Int              @default(0)  // PDs com múltiplas NFs (revisão manual)
+  requestsNotFound Int              @default(0)  // PD não encontrado no Citel
+  requestsError    Int              @default(0)  // erros de API
+  startedAt        DateTime         @default(now())
+  finishedAt       DateTime?
+  errorDetail      String?
+
+  @@index([status, startedAt])
+  @@map("nf_link_jobs")
 }

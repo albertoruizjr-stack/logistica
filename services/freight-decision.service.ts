@@ -286,7 +286,7 @@ export async function makeFreightDecision(
   const rows = await prisma.systemConfig.findMany({
     where: { key: { in: [...DECISION_CONFIG_KEYS] } },
   });
-  const cfg = Object.fromEntries(rows.map((r) => [r.key, parseFloat(r.value)])) as
+  const cfg = Object.fromEntries(rows.map((r) => [r.key, parseFloat(r.value)])) as unknown as
     VehicleConfig & CostConfig & { URGENCY_SURCHARGE_MIN: number; DRIVER_MAX_LOCATION_AGE_MIN: number };
 
   // 2. Classificação da carga
@@ -325,12 +325,14 @@ export async function makeFreightDecision(
       // cargo.lalamoveVehicle já é o código da API (ex: "MOTORCYCLE", "VAN")
       const serviceType = cargo.lalamoveVehicle;
       const quote = await getLalamoveQuote(origin, dest, input.isUrgent, serviceType);
-      lalamoveCost = parseFloat(quote.priceBreakdown.total);
-      lalamoveQuote = {
-        quotationId:    quote.quotationId,
-        estimatedPrice: lalamoveCost,
-        serviceType:    cargo.lalamoveVehicle,
-      };
+      if (!("reason" in quote)) {
+        lalamoveCost = parseFloat(quote.priceBreakdown.total);
+        lalamoveQuote = {
+          quotationId:    quote.quotationId,
+          estimatedPrice: lalamoveCost,
+          serviceType:    cargo.lalamoveVehicle,
+        };
+      }
     } catch {
       // Lalamove indisponível — decisão continua sem cotação externa
     }
