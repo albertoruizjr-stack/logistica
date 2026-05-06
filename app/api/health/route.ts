@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
+export const dynamic = "force-dynamic";
+
 export async function GET() {
   const info: Record<string, unknown> = {
     POSTGRES_PRISMA_URL: process.env.POSTGRES_PRISMA_URL
