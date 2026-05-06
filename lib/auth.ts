@@ -2,7 +2,6 @@ import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { NextRequest } from "next/server";
 import { prisma } from "./prisma";
-import { createHash } from "crypto";
 
 const JWT_SECRET = new TextEncoder().encode(
   process.env.JWT_SECRET || "mestre-da-pintura-logistica-secret-2024"
@@ -46,8 +45,12 @@ export async function getSessionFromRequest(req: NextRequest): Promise<JWTPayloa
   return verifyToken(token);
 }
 
-export function hashPassword(password: string): string {
-  return createHash("sha256").update(password).digest("hex");
+export async function hashPassword(password: string): Promise<string> {
+  const data = new TextEncoder().encode(password);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hashBuffer))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 export async function login(email: string, password: string) {
@@ -58,7 +61,7 @@ export async function login(email: string, password: string) {
 
   if (!user) return null;
 
-  const hashedPassword = hashPassword(password);
+  const hashedPassword = await hashPassword(password);
   if (user.password !== hashedPassword) return null;
 
   const payload: JWTPayload = {
