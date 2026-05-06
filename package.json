@@ -46,6 +46,9 @@
     "tailwindcss-animate": "^1.0.7",
     "zod": "^3.22.4"
   },
+  "engines": {
+    "node": "20.x"
+  },
   "devDependencies": {
     "@types/crypto-js": "^4.2.2",
     "@types/node": "^20",
