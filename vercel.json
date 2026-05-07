@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/cron/vincular-nf",
-      "schedule": "*/15 * * * *"
+      "schedule": "0 6 * * *"
     }
   ]
 }
