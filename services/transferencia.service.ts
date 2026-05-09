@@ -13,6 +13,7 @@ import { prisma } from "@/lib/prisma";
 import { TransferStatus, TransferPriority } from "@prisma/client";
 import type { CreateTransferInput, UpdateTransferStatusInput } from "@/types";
 import { fetchStockByProduct } from "./erp.service";
+import { transitionDeliveryRequest } from "@/services/state-machine.service";
 import {
   preCheckStock,
   commitStock,
@@ -336,7 +337,8 @@ export async function updateTransferStatus(
 // HELPERS INTERNOS
 // ──────────────────────────────────────────────
 
-// Avança para READY somente se todas as transferências foram recebidas sem divergências
+// Avança para SEPARADO somente se todas as transferências foram recebidas sem divergências.
+// Usa state machine para garantir auditoria e validação de gates.
 async function checkAndAdvanceDeliveryRequest(deliveryRequestId: string) {
   const transfers = await prisma.transfer.findMany({
     where: { deliveryRequestId },
@@ -346,7 +348,22 @@ async function checkAndAdvanceDeliveryRequest(deliveryRequestId: string) {
     (t) => t.status === TransferStatus.RECEIVED && !t.hasDivergence
   );
 
-  if (allClear) {
+  if (!allClear) return;
+
+  try {
+    await transitionDeliveryRequest({
+      requestId: deliveryRequestId,
+      actorId: "SYSTEM",
+      actorRole: "SYSTEM",
+      toStatus: "SEPARADO",
+      metadata: {
+        reason: "Todas as transferências recebidas sem divergências",
+        separatedBy: "SYSTEM",
+      },
+    });
+  } catch {
+    // Se gate falhar (ex: itens ainda indisponíveis), avança para READY (fluxo legado)
+    // e deixa o operador gerenciar manualmente
     await prisma.deliveryRequest.update({
       where: { id: deliveryRequestId },
       data: { status: "READY", isComplete: true },

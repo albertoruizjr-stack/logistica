@@ -29,14 +29,26 @@ enum DeliveryType {
 }
 
 enum DeliveryRequestStatus {
-  PENDING            // criada, aguardando análise
+  // ── Fase de preparação ──────────────────────────────────
+  PENDING            // criada, aguardando análise do operador
   AWAITING_ITEMS     // itens sendo separados na loja
-  AWAITING_TRANSFER  // aguardando chegada de transferência
-  READY              // tudo separado, pronto para despacho
-  DISPATCHED         // despachado para rota ou Lalamove
-  IN_TRANSIT         // motorista a caminho
+  AWAITING_TRANSFER  // aguardando chegada de transferência de outra loja
+  SEPARADO           // itens separados fisicamente — conferido pelo estoquista
+  // ── Fase fiscal ─────────────────────────────────────────
+  AGUARDANDO_NF      // aguardando emissão da nota fiscal no CD
+  NF_EMITIDA         // nota fiscal emitida no sistema Citel
+  NF_VINCULADA       // NF vinculada à solicitação pelo sistema
+  // ── Fase logística ──────────────────────────────────────
+  PRONTO_ROTEIRIZACAO // pronto para roteirização — endereço e NF validados
+  ROTEIRIZADO        // incluído em rota pelo operador logístico
+  DISPATCHED         // despachado — motorista/Lalamove acionado
+  IN_TRANSIT         // motorista em trajeto até o cliente
   DELIVERED          // entregue ao cliente
-  CANCELLED          // cancelada
+  // ── Estados especiais ───────────────────────────────────
+  OCORRENCIA         // ocorrência registrada — pendente de resolução operacional
+  CANCELLED          // cancelada (terminal)
+  // ── Compatibilidade (legado) ─────────────────────────────
+  READY              // legado: equivale a SEPARADO + NF_VINCULADA no fluxo antigo
 }
 
 // janela de despacho — determinada no momento da criação pela regra de corte
@@ -390,6 +402,12 @@ model DeliveryRequest {
   cutoffWarningShownAt  DateTime?          // quando o aviso de corte foi exibido
   cutoffApprovedBy      String?            // userId do gestor que aprovou exceção
   cutoffApprovalReason  String?            // motivo informado pelo vendedor ao solicitar exceção
+  // separação física — preenchida pelo estoquista ao marcar SEPARADO
+  separatedBy     String?               // userId de quem conferiu a separação
+  separatedAt     DateTime?             // quando a separação foi concluída
+  // ocorrência — preenchida ao marcar OCORRENCIA
+  occurrenceType  String?               // ex: AVARIA, RECUSA_ENTREGA, ENDERECO_ERRADO, AUSENTE
+  occurrenceNotes String?               // descrição detalhada da ocorrência
   // SLA e corte same-day (12h00)
   slaType               SLAType           @default(STANDARD)
   sameDayRequested      Boolean           @default(false) // vendedor solicitou entrega hoje após 12h
@@ -412,9 +430,32 @@ model DeliveryRequest {
   transfers    Transfer[]
   dispatch     Dispatch?
   audit        FreightAudit?
+  statusHistory DeliveryStatusHistory[]
 
   @@unique([orderNumber, orderStoreId])
   @@map("delivery_requests")
+}
+
+// ──────────────────────────────────────────────
+// HISTÓRICO DE STATUS DA SOLICITAÇÃO
+// Auditoria imutável de todas as transições de status.
+// Gerada exclusivamente pela state machine — nunca manualmente.
+// ──────────────────────────────────────────────
+
+model DeliveryStatusHistory {
+  id                String                 @id @default(cuid())
+  deliveryRequestId String
+  fromStatus        DeliveryRequestStatus? // null apenas na criação inicial
+  toStatus          DeliveryRequestStatus
+  changedById       String?                // userId do ator (null = sistema/automação)
+  reason            String?                // motivo da transição (opcional)
+  metadata          Json?                  // dados extras: occurrenceType, routeId, etc.
+  createdAt         DateTime               @default(now())
+
+  deliveryRequest DeliveryRequest @relation(fields: [deliveryRequestId], references: [id], onDelete: Cascade)
+
+  @@index([deliveryRequestId, createdAt])
+  @@map("delivery_status_history")
 }
 
 // ──────────────────────────────────────────────

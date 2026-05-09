@@ -10,6 +10,7 @@ import { DispatchModal, DispatchStatus, DeliveryType } from "@prisma/client";
 import type { CreateDispatchInput } from "@/types";
 import { isBeforeRouteCutoff } from "@/lib/utils";
 import { dispatchViaLalamove } from "@/lib/lalamove-dispatch";
+import { transitionDeliveryRequestWithTx } from "@/services/state-machine.service";
 
 // ──────────────────────────────────────────────
 // ENGINE DE DECISÃO DE MODAL
@@ -118,11 +119,13 @@ export async function createDispatch(input: CreateDispatchInput) {
       },
     });
 
-    // atualiza a solicitação de entrega para DISPATCHED
+    // avança solicitação para DISPATCHED via state machine (registra histórico)
     if (input.deliveryRequestId) {
-      await tx.deliveryRequest.update({
-        where: { id: input.deliveryRequestId },
-        data: { status: "DISPATCHED" },
+      await transitionDeliveryRequestWithTx(tx, input.deliveryRequestId, {
+        actorId: input.dispatchedById,
+        actorRole: "OPERATOR",
+        toStatus: "DISPATCHED",
+        metadata: { reason: "Despacho criado" },
       });
     }
 
@@ -251,17 +254,19 @@ export async function updateDispatchStatus(
       },
     });
 
-    // atualiza a solicitação de entrega
+    // avança solicitação via state machine (IN_TRANSIT ou DELIVERED)
     if (dispatch.deliveryRequestId) {
       const deliveryStatus =
-        status === DispatchStatus.IN_TRANSIT ? "IN_TRANSIT" :
-        status === DispatchStatus.COMPLETED ? "DELIVERED" :
-        undefined;
+        status === DispatchStatus.IN_TRANSIT ? "IN_TRANSIT" as const :
+        status === DispatchStatus.COMPLETED  ? "DELIVERED"  as const :
+        null;
 
       if (deliveryStatus) {
-        await tx.deliveryRequest.update({
-          where: { id: dispatch.deliveryRequestId },
-          data: { status: deliveryStatus },
+        await transitionDeliveryRequestWithTx(tx, dispatch.deliveryRequestId, {
+          actorId: "SYSTEM",
+          actorRole: "SYSTEM",
+          toStatus: deliveryStatus,
+          metadata: { reason: `Propagado de DispatchStatus.${status}` },
         });
       }
     }
