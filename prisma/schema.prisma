@@ -39,6 +39,14 @@ enum DeliveryRequestStatus {
   CANCELLED          // cancelada
 }
 
+// janela de despacho — determinada no momento da criação pela regra de corte
+enum DispatchWindow {
+  FIRST_DISPATCH   // criada até 17h30 seg-sex → despacho manhã D+1
+  SECOND_DISPATCH  // criada após 17h30 até fim do dia → despacho tarde D+1
+  NEXT_DAY         // criada após 12h para entrega D+0 → vai para D+2
+  EXPRESS          // Lalamove / urgente — ignora janela de corte
+}
+
 enum TransferStatus {
   PENDING      // criada, aguardando aprovação
   APPROVED     // aprovada pelo operador
@@ -369,6 +377,11 @@ model DeliveryRequest {
   totalValue      Float?
   notes           String?
   scheduledFor    DateTime?
+  // janela de despacho — regra de corte horário
+  dispatchWindow        DispatchWindow?    // calculada na criação; EXPRESS ignora corte
+  cutoffWarningShownAt  DateTime?          // quando o aviso de corte foi exibido
+  cutoffApprovedBy      String?            // userId do gestor que aprovou exceção
+  cutoffApprovalReason  String?            // motivo informado pelo vendedor ao solicitar exceção
   // rastreio de tentativas de vínculo automático PD → NF
   nfLinkLastAttemptAt DateTime?         // quando foi a última tentativa
   nfLinkAttemptCount  Int      @default(0) // quantas tentativas já foram feitas

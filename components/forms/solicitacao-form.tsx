@@ -7,9 +7,16 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import {
   Loader2, Search, Package, User, MapPin, CheckCircle2,
-  AlertTriangle, ArrowLeftRight, FileText, Zap, TrendingUp
+  AlertTriangle, ArrowLeftRight, FileText, Zap, TrendingUp, Clock, X
 } from "lucide-react";
 import { cn, formatCurrency } from "@/lib/utils";
+import {
+  getCutoffStatus,
+  FIRST_CUTOFF,
+  DISPATCH_WINDOW_LABELS,
+  type CutoffStatus,
+  type DispatchWindowValue,
+} from "@/lib/cutoff";
 import type { ERPInvoice } from "@/types";
 
 // Step 1: buscar NF
@@ -44,6 +51,7 @@ interface Props {
 }
 
 type Step = "SEARCH" | "CONFIRM" | "AVAILABILITY" | "SUBMITTING" | "DONE" | "DUPLICATE";
+type CutoffChoice = "SECOND_DISPATCH" | "EXPRESS" | "EXCEPTION";
 
 export function NovaSolicitacaoForm({ stores, sessionStoreId }: Props) {
   const router = useRouter();
@@ -59,6 +67,27 @@ export function NovaSolicitacaoForm({ stores, sessionStoreId }: Props) {
   const [suggestedFreight, setSuggestedFreight] = useState<number | null>(null);
   const [destCoords, setDestCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [freightLoading, setFreightLoading] = useState(false);
+  // corte horário
+  const [cutoffStatus, setCutoffStatus] = useState<CutoffStatus | null>(null);
+  const [showCutoffModal, setShowCutoffModal] = useState(false);
+  const [cutoffChoice, setCutoffChoice] = useState<CutoffChoice | null>(null);
+  const [exceptionReason, setExceptionReason] = useState("");
+  const [cutoffWarningShownAt, setCutoffWarningShownAt] = useState<Date | null>(null);
+
+  // Verifica corte horário na montagem e a cada minuto
+  useEffect(() => {
+    const check = () => {
+      const status = getCutoffStatus();
+      setCutoffStatus(status);
+      if (status.isAfterFirst && !cutoffWarningShownAt) {
+        setCutoffWarningShownAt(new Date());
+      }
+    };
+    check();
+    const interval = setInterval(check, 60_000);
+    return () => clearInterval(interval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const step1 = useForm<Step1Data>({
     resolver: zodResolver(step1Schema),
@@ -178,19 +207,35 @@ export function NovaSolicitacaoForm({ stores, sessionStoreId }: Props) {
   const allAvailable = Object.values(itemAvailability).every(Boolean);
   const missingCount = Object.values(itemAvailability).filter((v) => !v).length;
 
-  // Step 2: submete a solicitação
+  // Step 2: verifica corte → abre modal se necessário → submete
   async function handleSubmit(data: Step2Data) {
     if (!invoice) return;
+
+    // Se está após o corte e ainda não escolheu o que fazer → abre modal
+    if (cutoffStatus?.isAfterFirst && data.deliveryType !== "URGENT" && !cutoffChoice) {
+      setShowCutoffModal(true);
+      return;
+    }
+
+    await submitSolicitacao(data);
+  }
+
+  async function submitSolicitacao(data: Step2Data, choiceOverride?: CutoffChoice) {
+    const choice = choiceOverride ?? cutoffChoice;
     setStep("SUBMITTING");
     setSubmitError(null);
 
-    // salva cotação definitiva (com isUrgent correto) antes de criar a solicitação
+    // Se escolheu EXPRESS, força deliveryType para URGENT
+    const effectiveDeliveryType =
+      choice === "EXPRESS" ? "URGENT" : data.deliveryType;
+
+    // Salva cotação definitiva antes de criar a solicitação
     let freightQuoteId: string | undefined;
     if (destCoords) {
       const store = stores.find((s) => s.id === step1.getValues("storeId"));
       if (store) {
         try {
-          const address = `${invoice.deliveryAddress.street}, ${invoice.deliveryAddress.city}, ${invoice.deliveryAddress.state}`;
+          const address = `${invoice!.deliveryAddress.street}, ${invoice!.deliveryAddress.city}, ${invoice!.deliveryAddress.state}`;
           const quoteRes = await fetch("/api/frete/cotacao", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -202,7 +247,7 @@ export function NovaSolicitacaoForm({ stores, sessionStoreId }: Props) {
               destAddress: address,
               destLat: destCoords.lat,
               destLng: destCoords.lng,
-              isUrgent: data.deliveryType === "URGENT",
+              isUrgent: effectiveDeliveryType === "URGENT",
               save: true,
             }),
           });
@@ -216,21 +261,31 @@ export function NovaSolicitacaoForm({ stores, sessionStoreId }: Props) {
       }
     }
 
+    // Mapeia a escolha do vendedor para o override de API
+    const dispatchWindowOverride =
+      choice === "EXPRESS" ? "EXPRESS" :
+      choice === "EXCEPTION" ? "EXCEPTION" :
+      undefined;
+
     const payload = {
-      invoiceNumber: invoice.invoiceNumber,
+      invoiceNumber: invoice!.invoiceNumber,
       storeId: step1.getValues("storeId"),
-      deliveryType: data.deliveryType,
+      deliveryType: effectiveDeliveryType,
       chargedFreight: data.chargedFreight,
       isComplete: allAvailable,
       notes: data.notes,
       freightQuoteId,
-      itemsAvailability: invoice.items.map((item) => ({
+      itemsAvailability: invoice!.items.map((item) => ({
         productCode: item.productCode,
         productName: item.productName,
         quantity: item.quantity,
         unit: item.unit,
         availableAtStore: itemAvailability[item.productCode] ?? true,
       })),
+      // campos de corte horário
+      ...(dispatchWindowOverride ? { dispatchWindowOverride } : {}),
+      ...(choice === "EXCEPTION" && exceptionReason ? { cutoffApprovalReason: exceptionReason } : {}),
+      ...(cutoffWarningShownAt ? { cutoffWarningShownAt: cutoffWarningShownAt.toISOString() } : {}),
     };
 
     try {
@@ -349,8 +404,160 @@ export function NovaSolicitacaoForm({ stores, sessionStoreId }: Props) {
     );
   }
 
+  // ── MODAL DE CORTE HORÁRIO ──
+  const CutoffModal = () => {
+    const [localReason, setLocalReason] = useState(exceptionReason);
+
+    function choose(choice: CutoffChoice) {
+      setCutoffChoice(choice);
+      setShowCutoffModal(false);
+      if (choice === "EXCEPTION") {
+        setExceptionReason(localReason);
+      }
+      void submitSolicitacao(step2.getValues(), choice);
+    }
+
+    if (!showCutoffModal) return null;
+
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 relative">
+          <button
+            onClick={() => setShowCutoffModal(false)}
+            className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition"
+          >
+            <X className="w-5 h-5" />
+          </button>
+
+          {/* Ícone + título */}
+          <div className="flex items-start gap-3 mb-4">
+            <div className="w-10 h-10 bg-amber-100 rounded-full flex items-center justify-center flex-shrink-0">
+              <Clock className="w-5 h-5 text-amber-600" />
+            </div>
+            <div>
+              <h3 className="font-bold text-gray-900 text-base leading-tight">
+                Horário de corte das {FIRST_CUTOFF.hour}h{String(FIRST_CUTOFF.minute).padStart(2, "0")} atingido
+              </h3>
+              <p className="text-sm text-gray-500 mt-0.5">
+                São {cutoffStatus?.brasiliaTime.hour}h{String(cutoffStatus?.brasiliaTime.minute ?? 0).padStart(2, "0")} (horário de Brasília)
+              </p>
+            </div>
+          </div>
+
+          {/* Mensagem */}
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-5 text-sm text-amber-800">
+            Esta solicitação entrou após o horário de corte das 17h30. Ela será programada para o{" "}
+            <strong>segundo despacho do dia seguinte</strong>.
+            <br /><br />
+            Caso o cliente precise receber no período da manhã, altere para entrega expressa via Lalamove,
+            sujeito a novo custo de frete.
+          </div>
+
+          {/* Opções */}
+          <div className="space-y-3">
+            {/* Opção 1: Manter no 2º despacho */}
+            <button
+              onClick={() => choose("SECOND_DISPATCH")}
+              className="w-full text-left px-4 py-3 border-2 border-gray-200 rounded-xl hover:border-orange-300 hover:bg-orange-50 transition group"
+            >
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="font-semibold text-gray-900 text-sm group-hover:text-orange-900">
+                    Manter no 2º despacho
+                  </p>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Entrega no período da tarde do dia seguinte
+                  </p>
+                </div>
+                <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded-full font-medium">
+                  Recomendado
+                </span>
+              </div>
+            </button>
+
+            {/* Opção 2: Entrega expressa */}
+            <button
+              onClick={() => choose("EXPRESS")}
+              className="w-full text-left px-4 py-3 border-2 border-gray-200 rounded-xl hover:border-blue-300 hover:bg-blue-50 transition group"
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-start gap-2">
+                  <Zap className="w-4 h-4 text-blue-500 mt-0.5 flex-shrink-0" />
+                  <div>
+                    <p className="font-semibold text-gray-900 text-sm group-hover:text-blue-900">
+                      Alterar para entrega expressa
+                    </p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      Via Lalamove · Novo custo de frete aplicado
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </button>
+
+            {/* Opção 3: Solicitar aprovação */}
+            <div className="border-2 border-gray-200 rounded-xl overflow-hidden hover:border-red-200 transition">
+              <div className="px-4 py-3">
+                <div className="flex items-start gap-2 mb-2">
+                  <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 flex-shrink-0" />
+                  <div>
+                    <p className="font-semibold text-gray-900 text-sm">
+                      Solicitar aprovação excepcional
+                    </p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      A equipe logística precisará aprovar a entrada no 1º despacho
+                    </p>
+                  </div>
+                </div>
+                <textarea
+                  value={localReason}
+                  onChange={(e) => setLocalReason(e.target.value)}
+                  placeholder="Descreva o motivo da urgência para aprovação..."
+                  rows={2}
+                  className="w-full text-sm px-3 py-2 border border-gray-200 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-red-300 mt-1"
+                />
+                <button
+                  onClick={() => { setExceptionReason(localReason); choose("EXCEPTION"); }}
+                  disabled={!localReason.trim()}
+                  className="mt-2 w-full py-2 bg-red-500 hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition"
+                >
+                  Solicitar aprovação
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <button
+            onClick={() => setShowCutoffModal(false)}
+            className="mt-4 w-full text-center text-sm text-gray-400 hover:text-gray-600 transition"
+          >
+            Cancelar — voltar ao formulário
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-5">
+      <CutoffModal />
+
+      {/* ── BANNER DE CORTE HORÁRIO ── */}
+      {cutoffStatus?.isAfterFirst && (step as Step) !== "DONE" && (step as Step) !== "DUPLICATE" && (
+        <div className="bg-amber-50 border border-amber-300 rounded-xl px-4 py-3 flex items-start gap-3">
+          <Clock className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-semibold text-amber-900">
+              São {cutoffStatus.brasiliaTime.hour}h{String(cutoffStatus.brasiliaTime.minute).padStart(2, "0")} — horário de corte das 17h30 atingido
+            </p>
+            <p className="text-xs text-amber-700 mt-0.5">
+              Novas solicitações entram no <strong>2º despacho do dia seguinte</strong>.
+              Para entrega pela manhã, use entrega expressa via Lalamove.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* ── STEP 1: Busca NF ── */}
       <div className="bg-white rounded-xl border border-gray-200 p-6">
         <div className="flex items-center gap-2 mb-5">

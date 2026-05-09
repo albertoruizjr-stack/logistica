@@ -8,8 +8,14 @@ import { InternalVehicleType, LalamoveServiceType } from "@/types"
 export const STORE_CODES = ["067", "131", "132", "173", "191"] as const;
 export type StoreCode = (typeof STORE_CODES)[number];
 
-// hora de corte para rota do dia (16h → entregas criadas depois vão para amanhã)
+// hora de corte para rota do dia — mantido para compatibilidade com código legado
 export const INTERNAL_ROUTE_CUTOFF_HOUR = 16;
+
+// regras de corte da janela de despacho (use lib/cutoff.ts para lógica completa)
+export const FIRST_DISPATCH_CUTOFF_HOUR   = 17;
+export const FIRST_DISPATCH_CUTOFF_MINUTE = 30;
+export const SECOND_DISPATCH_CUTOFF_HOUR  = 12;
+export const SECOND_DISPATCH_CUTOFF_MINUTE = 0;
 
 // limite máximo de km para rota interna padrão (acima disso sugerir Lalamove)
 export const MAX_STANDARD_KM = 20;

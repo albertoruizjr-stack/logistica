@@ -7,6 +7,7 @@ import { DeliveryType, DeliveryRequestStatus, TransferPriority } from "@prisma/c
 import { fetchOrderFromERP, fetchStockForItems } from "@/services/erp.service";
 import { createTransfer } from "@/services/transferencia.service";
 import { createOrUpdateInitialAudit } from "@/services/audit.service";
+import { getDispatchWindow, isAfterFirstCutoff } from "@/lib/cutoff";
 
 const createSchema = z.object({
   // identificação pelo Pedido (PD)
@@ -25,6 +26,10 @@ const createSchema = z.object({
   customerName:  z.string().min(2, "Informe o nome do destinatário"),
   customerPhone: z.string().min(8, "Informe o telefone do destinatário"),
   deliveryAddress: z.string().min(5, "Informe o endereço de entrega"),
+  // janela de despacho — escolha do vendedor após aviso de corte
+  dispatchWindowOverride: z.enum(["EXPRESS", "EXCEPTION"]).optional(),
+  cutoffApprovalReason:   z.string().max(500).optional(),
+  cutoffWarningShownAt:   z.string().datetime().optional(),
 });
 
 export async function GET(req: NextRequest) {
@@ -135,6 +140,11 @@ export async function POST(req: NextRequest) {
         ? DeliveryRequestStatus.PENDING
         : DeliveryRequestStatus.AWAITING_TRANSFER;
 
+    // Calcula a janela de despacho com base no horário atual (Brasília) + override do vendedor
+    const now = new Date();
+    const dispatchWindow = getDispatchWindow(now, data.deliveryType, data.dispatchWindowOverride);
+    const afterCutoff = isAfterFirstCutoff(now);
+
     const deliveryRequest = await prisma.deliveryRequest.create({
       data: {
         orderNumber:      data.orderNumber,
@@ -156,6 +166,14 @@ export async function POST(req: NextRequest) {
         notes:            data.notes,
         scheduledFor:     data.scheduledFor ? new Date(data.scheduledFor) : undefined,
         status:           initialStatus,
+        // janela de despacho
+        dispatchWindow,
+        cutoffWarningShownAt: afterCutoff && data.cutoffWarningShownAt
+          ? new Date(data.cutoffWarningShownAt)
+          : null,
+        cutoffApprovalReason: data.dispatchWindowOverride === "EXCEPTION"
+          ? (data.cutoffApprovalReason ?? null)
+          : null,
         items: itemsWithAvailability.length > 0
           ? {
               create: itemsWithAvailability.map((item) => ({

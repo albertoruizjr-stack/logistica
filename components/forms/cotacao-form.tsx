@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Loader2, Calculator, AlertCircle, CheckCircle2, Clock, Zap, Truck, MapPin, Search, Package } from "lucide-react";
 import { cn, formatCurrency, formatDistance } from "@/lib/utils";
 import { SolicitarEntregaDrawer } from "@/components/cotacao/solicitar-entrega-drawer";
+import { getCutoffStatus, FIRST_CUTOFF, type CutoffStatus } from "@/lib/cutoff";
 
 const schema = z.object({
   storeId: z.string().min(1, "Selecione a loja de origem"),
@@ -58,6 +59,14 @@ export function FreightQuoteForm({ stores, sessionStoreId }: Props) {
   const [savingQuote, setSavingQuote] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [savedQuote, setSavedQuote] = useState<{ id: string } | null>(null);
+  const [cutoffStatus, setCutoffStatus] = useState<CutoffStatus | null>(null);
+
+  useEffect(() => {
+    const check = () => setCutoffStatus(getCutoffStatus());
+    check();
+    const id = setInterval(check, 60_000);
+    return () => clearInterval(id);
+  }, []);
 
   const {
     register,
@@ -181,6 +190,23 @@ export function FreightQuoteForm({ stores, sessionStoreId }: Props) {
   }
 
   return (
+    <div className="space-y-4">
+      {/* ── BANNER DE CORTE HORÁRIO ── */}
+      {cutoffStatus?.isAfterFirst && (
+        <div className="bg-amber-50 border border-amber-300 rounded-xl px-4 py-3 flex items-start gap-3">
+          <Clock className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-semibold text-amber-900">
+              São {cutoffStatus.brasiliaTime.hour}h{String(cutoffStatus.brasiliaTime.minute).padStart(2, "0")} — horário de corte das {FIRST_CUTOFF.hour}h{String(FIRST_CUTOFF.minute).padStart(2, "0")} atingido
+            </p>
+            <p className="text-xs text-amber-700 mt-0.5">
+              Solicitações criadas agora entram no <strong>2º despacho do dia seguinte</strong>.
+              Para entrega pela manhã, altere para <strong>entrega expressa</strong> via Lalamove.
+            </p>
+          </div>
+        </div>
+      )}
+
     <div className="bg-white rounded-xl border border-gray-200 p-6">
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
         {/* Loja de origem */}
@@ -454,6 +480,7 @@ export function FreightQuoteForm({ stores, sessionStoreId }: Props) {
           )}
         </div>
       )}
+    </div>
     </div>
   );
 }
