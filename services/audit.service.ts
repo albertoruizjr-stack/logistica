@@ -188,6 +188,30 @@ export async function addJustification(
 }
 
 // ──────────────────────────────────────────────
+// EXCEÇÃO SAME-DAY
+// Registra que um vendedor solicitou entrega no mesmo dia após o corte das 12h.
+// Chamado quando sameDayRequested = true na criação da solicitação.
+// ──────────────────────────────────────────────
+
+export interface SameDayExceptionParams {
+  deliveryRequestId: string;
+  sellerId: string;
+  approvalReason: string;
+  requestedAt: Date;
+}
+
+export async function recordSameDayException(params: SameDayExceptionParams): Promise<void> {
+  await prisma.deliveryRequest.update({
+    where: { id: params.deliveryRequestId },
+    data: {
+      sameDayRequested: true,
+      sameDayApprovalReason: params.approvalReason,
+      sameDayRequestedAt: params.requestedAt,
+    },
+  });
+}
+
+// ──────────────────────────────────────────────
 // LISTA DE AUDITORIAS (filtrada e paginada)
 // ──────────────────────────────────────────────
 

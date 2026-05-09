@@ -123,6 +123,30 @@ export function getDispatchWindow(
   return "SECOND_DISPATCH";
 }
 
+// ──────────────────────────────────────────────
+// CORTE SAME-DAY (12h00)
+// Entregas URGENT (D+0 via frota interna) precisam ser criadas até 12h.
+// Após 12h, o vendedor pode: ir para EXPRESS (Lalamove), reagendar para D+1
+// ou solicitar exceção operacional com justificativa.
+// ──────────────────────────────────────────────
+
+export type SameDayCutoffChoice = "EXPRESS" | "NEXT_DAY" | "EXCEPTION";
+
+export function isSameDayAfterCutoff(date: Date = new Date()): boolean {
+  return isAfterSecondCutoff(date);
+}
+
+export const SAME_DAY_CUTOFF_MESSAGES = {
+  title: "Corte de 12h00 — entrega no mesmo dia",
+  body: "Após as 12h00, a frota interna não garante mais entrega hoje.\n\nPara o cliente receber hoje, use a entrega expressa via Lalamove.",
+} as const;
+
+export const SAME_DAY_CHOICE_LABELS: Record<SameDayCutoffChoice, string> = {
+  EXPRESS:   "Entrega expressa via Lalamove (entrega hoje)",
+  NEXT_DAY:  "Reagendar para amanhã — 1º Despacho",
+  EXCEPTION: "Solicitar exceção operacional (aprovação necessária)",
+};
+
 // Texto do aviso exibido ao vendedor (após 17h30)
 export const CUTOFF_MESSAGES = {
   AFTER_FIRST: {

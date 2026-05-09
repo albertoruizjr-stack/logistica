@@ -7,7 +7,8 @@ import { DeliveryType, DeliveryRequestStatus, TransferPriority } from "@prisma/c
 import { fetchOrderFromERP, fetchStockForItems } from "@/services/erp.service";
 import { createTransfer } from "@/services/transferencia.service";
 import { createOrUpdateInitialAudit } from "@/services/audit.service";
-import { getDispatchWindow, isAfterFirstCutoff } from "@/lib/cutoff";
+import { getDispatchWindow, isAfterFirstCutoff, isAfterSecondCutoff } from "@/lib/cutoff";
+import { recordSameDayException } from "@/services/audit.service";
 
 const createSchema = z.object({
   // identificação pelo Pedido (PD)
@@ -26,10 +27,13 @@ const createSchema = z.object({
   customerName:  z.string().min(2, "Informe o nome do destinatário"),
   customerPhone: z.string().min(8, "Informe o telefone do destinatário"),
   deliveryAddress: z.string().min(5, "Informe o endereço de entrega"),
-  // janela de despacho — escolha do vendedor após aviso de corte
+  // janela de despacho 17h30 — escolha do vendedor após aviso de corte
   dispatchWindowOverride: z.enum(["EXPRESS", "EXCEPTION"]).optional(),
   cutoffApprovalReason:   z.string().max(500).optional(),
   cutoffWarningShownAt:   z.string().datetime().optional(),
+  // corte same-day 12h00 — entrega urgente após o horário limite
+  sameDayRequested:       z.boolean().optional(),
+  sameDayApprovalReason:  z.string().max(500).optional(),
 });
 
 export async function GET(req: NextRequest) {
@@ -144,6 +148,21 @@ export async function POST(req: NextRequest) {
     const now = new Date();
     const dispatchWindow = getDispatchWindow(now, data.deliveryType, data.dispatchWindowOverride);
     const afterCutoff = isAfterFirstCutoff(now);
+    const afterSameDayCutoff = isAfterSecondCutoff(now);
+
+    // Gate same-day: URGENT após 12h exige EXPRESS ou justificativa de exceção
+    const isSameDayRequest = data.deliveryType === DeliveryType.URGENT;
+    if (isSameDayRequest && afterSameDayCutoff && data.dispatchWindowOverride !== "EXPRESS") {
+      if (!data.sameDayApprovalReason) {
+        return NextResponse.json(
+          apiError(
+            "Após 12h00, entregas urgentes precisam de entrega expressa (Lalamove) ou justificativa de exceção operacional.",
+            "SAME_DAY_CUTOFF"
+          ),
+          { status: 422 }
+        );
+      }
+    }
 
     const deliveryRequest = await prisma.deliveryRequest.create({
       data: {
@@ -166,13 +185,24 @@ export async function POST(req: NextRequest) {
         notes:            data.notes,
         scheduledFor:     data.scheduledFor ? new Date(data.scheduledFor) : undefined,
         status:           initialStatus,
-        // janela de despacho
+        // janela de despacho (corte 17h30)
         dispatchWindow,
         cutoffWarningShownAt: afterCutoff && data.cutoffWarningShownAt
           ? new Date(data.cutoffWarningShownAt)
           : null,
         cutoffApprovalReason: data.dispatchWindowOverride === "EXCEPTION"
           ? (data.cutoffApprovalReason ?? null)
+          : null,
+        // SLA e corte same-day (12h00)
+        slaType: data.dispatchWindowOverride === "EXPRESS"
+          ? "EXPRESS"
+          : isSameDayRequest ? "URGENT" : "STANDARD",
+        sameDayRequested: isSameDayRequest && afterSameDayCutoff && !!data.sameDayApprovalReason,
+        sameDayApprovalReason: isSameDayRequest && afterSameDayCutoff
+          ? (data.sameDayApprovalReason ?? null)
+          : null,
+        sameDayRequestedAt: isSameDayRequest && afterSameDayCutoff && data.sameDayApprovalReason
+          ? now
           : null,
         items: itemsWithAvailability.length > 0
           ? {
@@ -189,6 +219,16 @@ export async function POST(req: NextRequest) {
       },
       include: { items: true, store: true },
     });
+
+    // Registra exceção same-day para auditoria e alertas operacionais
+    if (isSameDayRequest && afterSameDayCutoff && data.sameDayApprovalReason) {
+      await recordSameDayException({
+        deliveryRequestId: deliveryRequest.id,
+        sellerId: session.userId,
+        approvalReason: data.sameDayApprovalReason,
+        requestedAt: now,
+      });
+    }
 
     // Cria transferências automáticas para itens faltantes (só quando veio do ERP)
     const missingItems = itemsWithAvailability.filter((i) => !i.availableAtStore);

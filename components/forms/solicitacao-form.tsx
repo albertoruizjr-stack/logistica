@@ -7,7 +7,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import {
   Loader2, Search, Package, User, MapPin, CheckCircle2,
-  AlertTriangle, ArrowLeftRight, FileText, Zap, TrendingUp, Clock, X
+  AlertTriangle, ArrowLeftRight, FileText, Zap, TrendingUp, Clock, X, Calendar
 } from "lucide-react";
 import { cn, formatCurrency } from "@/lib/utils";
 import {
@@ -16,6 +16,7 @@ import {
   DISPATCH_WINDOW_LABELS,
   type CutoffStatus,
   type DispatchWindowValue,
+  type SameDayCutoffChoice,
 } from "@/lib/cutoff";
 import type { ERPInvoice } from "@/types";
 
@@ -67,12 +68,16 @@ export function NovaSolicitacaoForm({ stores, sessionStoreId }: Props) {
   const [suggestedFreight, setSuggestedFreight] = useState<number | null>(null);
   const [destCoords, setDestCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [freightLoading, setFreightLoading] = useState(false);
-  // corte horário
+  // corte horário 17h30
   const [cutoffStatus, setCutoffStatus] = useState<CutoffStatus | null>(null);
   const [showCutoffModal, setShowCutoffModal] = useState(false);
   const [cutoffChoice, setCutoffChoice] = useState<CutoffChoice | null>(null);
   const [exceptionReason, setExceptionReason] = useState("");
   const [cutoffWarningShownAt, setCutoffWarningShownAt] = useState<Date | null>(null);
+  // corte same-day 12h00
+  const [showSameDayModal, setShowSameDayModal] = useState(false);
+  const [sameDayCutoffChoice, setSameDayCutoffChoice] = useState<SameDayCutoffChoice | null>(null);
+  const [sameDayApprovalReason, setSameDayApprovalReason] = useState("");
 
   // Verifica corte horário na montagem e a cada minuto
   useEffect(() => {
@@ -211,7 +216,13 @@ export function NovaSolicitacaoForm({ stores, sessionStoreId }: Props) {
   async function handleSubmit(data: Step2Data) {
     if (!invoice) return;
 
-    // Se está após o corte e ainda não escolheu o que fazer → abre modal
+    // Gate 1 — same-day: URGENT após 12h e ainda não escolheu o que fazer
+    if (cutoffStatus?.isAfterSecond && data.deliveryType === "URGENT" && !sameDayCutoffChoice) {
+      setShowSameDayModal(true);
+      return;
+    }
+
+    // Gate 2 — 17h30: padrão após corte e ainda não escolheu
     if (cutoffStatus?.isAfterFirst && data.deliveryType !== "URGENT" && !cutoffChoice) {
       setShowCutoffModal(true);
       return;
@@ -220,14 +231,24 @@ export function NovaSolicitacaoForm({ stores, sessionStoreId }: Props) {
     await submitSolicitacao(data);
   }
 
-  async function submitSolicitacao(data: Step2Data, choiceOverride?: CutoffChoice) {
+  async function submitSolicitacao(
+    data: Step2Data,
+    choiceOverride?: CutoffChoice,
+    sameDayChoiceOverride?: SameDayCutoffChoice
+  ) {
     const choice = choiceOverride ?? cutoffChoice;
+    const sdChoice = sameDayChoiceOverride ?? sameDayCutoffChoice;
     setStep("SUBMITTING");
     setSubmitError(null);
 
-    // Se escolheu EXPRESS, força deliveryType para URGENT
-    const effectiveDeliveryType =
-      choice === "EXPRESS" ? "URGENT" : data.deliveryType;
+    // Same-day: se escolheu NEXT_DAY, muda para STANDARD; se EXPRESS, força URGENT
+    // Corte 17h30: se escolheu EXPRESS, força URGENT
+    let effectiveDeliveryType = data.deliveryType;
+    if (sdChoice === "NEXT_DAY") {
+      effectiveDeliveryType = "STANDARD";
+    } else if (sdChoice === "EXPRESS" || choice === "EXPRESS") {
+      effectiveDeliveryType = "URGENT";
+    }
 
     // Salva cotação definitiva antes de criar a solicitação
     let freightQuoteId: string | undefined;
@@ -261,8 +282,10 @@ export function NovaSolicitacaoForm({ stores, sessionStoreId }: Props) {
       }
     }
 
-    // Mapeia a escolha do vendedor para o override de API
-    const dispatchWindowOverride =
+    // Mapeia escolhas para overrides de API
+    // Same-day EXPRESS ou 17h30 EXPRESS → ambos viram "EXPRESS" no dispatchWindowOverride
+    const dispatchWindowOverride: "EXPRESS" | "EXCEPTION" | undefined =
+      sdChoice === "EXPRESS" ? "EXPRESS" :
       choice === "EXPRESS" ? "EXPRESS" :
       choice === "EXCEPTION" ? "EXCEPTION" :
       undefined;
@@ -282,10 +305,14 @@ export function NovaSolicitacaoForm({ stores, sessionStoreId }: Props) {
         unit: item.unit,
         availableAtStore: itemAvailability[item.productCode] ?? true,
       })),
-      // campos de corte horário
+      // campos de corte 17h30
       ...(dispatchWindowOverride ? { dispatchWindowOverride } : {}),
       ...(choice === "EXCEPTION" && exceptionReason ? { cutoffApprovalReason: exceptionReason } : {}),
       ...(cutoffWarningShownAt ? { cutoffWarningShownAt: cutoffWarningShownAt.toISOString() } : {}),
+      // campos de corte same-day 12h00
+      ...(sdChoice === "EXCEPTION" && sameDayApprovalReason
+        ? { sameDayRequested: true, sameDayApprovalReason }
+        : {}),
     };
 
     try {
@@ -404,7 +431,134 @@ export function NovaSolicitacaoForm({ stores, sessionStoreId }: Props) {
     );
   }
 
-  // ── MODAL DE CORTE HORÁRIO ──
+  // ── MODAL DE CORTE SAME-DAY (12h00) ──
+  const SameDayModal = () => {
+    const [localReason, setLocalReason] = useState(sameDayApprovalReason);
+
+    function choose(sdChoice: SameDayCutoffChoice) {
+      setSameDayCutoffChoice(sdChoice);
+      setShowSameDayModal(false);
+      if (sdChoice === "EXCEPTION") {
+        setSameDayApprovalReason(localReason);
+      }
+      void submitSolicitacao(step2.getValues(), undefined, sdChoice);
+    }
+
+    if (!showSameDayModal) return null;
+
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 relative">
+          <button
+            onClick={() => setShowSameDayModal(false)}
+            className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition"
+          >
+            <X className="w-5 h-5" />
+          </button>
+
+          <div className="flex items-start gap-3 mb-4">
+            <div className="w-10 h-10 bg-orange-100 rounded-full flex items-center justify-center flex-shrink-0">
+              <AlertTriangle className="w-5 h-5 text-orange-600" />
+            </div>
+            <div>
+              <h3 className="font-bold text-gray-900 text-base leading-tight">
+                Corte de 12h00 — entrega no mesmo dia
+              </h3>
+              <p className="text-sm text-gray-500 mt-0.5">
+                São {cutoffStatus?.brasiliaTime.hour}h{String(cutoffStatus?.brasiliaTime.minute ?? 0).padStart(2, "0")} (horário de Brasília)
+              </p>
+            </div>
+          </div>
+
+          <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 mb-5 text-sm text-orange-800">
+            Após as 12h00, a frota interna <strong>não garante entrega hoje</strong>.
+            <br /><br />
+            Escolha como prosseguir com esta solicitação urgente.
+          </div>
+
+          <div className="space-y-3">
+            {/* Opção 1: Expressa via Lalamove */}
+            <button
+              onClick={() => choose("EXPRESS")}
+              className="w-full text-left px-4 py-3 border-2 border-gray-200 rounded-xl hover:border-blue-300 hover:bg-blue-50 transition group"
+            >
+              <div className="flex items-start gap-2">
+                <Zap className="w-4 h-4 text-blue-500 mt-0.5 flex-shrink-0" />
+                <div>
+                  <p className="font-semibold text-gray-900 text-sm group-hover:text-blue-900">
+                    Entrega expressa via Lalamove
+                  </p>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Garante entrega hoje · Novo custo de frete aplicado
+                  </p>
+                </div>
+              </div>
+            </button>
+
+            {/* Opção 2: Reagendar para amanhã */}
+            <button
+              onClick={() => choose("NEXT_DAY")}
+              className="w-full text-left px-4 py-3 border-2 border-gray-200 rounded-xl hover:border-orange-300 hover:bg-orange-50 transition group"
+            >
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="font-semibold text-gray-900 text-sm group-hover:text-orange-900">
+                    Reagendar para amanhã
+                  </p>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Entra no 1º Despacho do dia seguinte · Frete padrão
+                  </p>
+                </div>
+                <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded-full font-medium">
+                  Recomendado
+                </span>
+              </div>
+            </button>
+
+            {/* Opção 3: Exceção operacional */}
+            <div className="border-2 border-gray-200 rounded-xl overflow-hidden hover:border-red-200 transition">
+              <div className="px-4 py-3">
+                <div className="flex items-start gap-2 mb-2">
+                  <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 flex-shrink-0" />
+                  <div>
+                    <p className="font-semibold text-gray-900 text-sm">
+                      Solicitar exceção operacional
+                    </p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      A logística precisará aprovar a entrega hoje pela frota interna
+                    </p>
+                  </div>
+                </div>
+                <textarea
+                  value={localReason}
+                  onChange={(e) => setLocalReason(e.target.value)}
+                  placeholder="Descreva o motivo — ex: cliente não pode receber amanhã..."
+                  rows={2}
+                  className="w-full text-sm px-3 py-2 border border-gray-200 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-red-300 mt-1"
+                />
+                <button
+                  onClick={() => { setSameDayApprovalReason(localReason); choose("EXCEPTION"); }}
+                  disabled={!localReason.trim()}
+                  className="mt-2 w-full py-2 bg-red-500 hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition"
+                >
+                  Solicitar exceção
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <button
+            onClick={() => setShowSameDayModal(false)}
+            className="mt-4 w-full text-center text-sm text-gray-400 hover:text-gray-600 transition"
+          >
+            Cancelar — voltar ao formulário
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  // ── MODAL DE CORTE HORÁRIO (17h30) ──
   const CutoffModal = () => {
     const [localReason, setLocalReason] = useState(exceptionReason);
 
@@ -540,9 +694,31 @@ export function NovaSolicitacaoForm({ stores, sessionStoreId }: Props) {
 
   return (
     <div className="space-y-5">
+      <SameDayModal />
       <CutoffModal />
 
-      {/* ── BANNER DE CORTE HORÁRIO ── */}
+      {/* ── BANNER: corte same-day 12h00 (URGENT após meio-dia) ── */}
+      {cutoffStatus?.isAfterSecond &&
+        step2.watch("deliveryType") === "URGENT" &&
+        !sameDayCutoffChoice &&
+        (step as Step) !== "DONE" &&
+        (step as Step) !== "DUPLICATE" && (
+        <div className="bg-orange-50 border border-orange-300 rounded-xl px-4 py-3 flex items-start gap-3">
+          <AlertTriangle className="w-5 h-5 text-orange-600 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-semibold text-orange-900">
+              São {cutoffStatus.brasiliaTime.hour}h{String(cutoffStatus.brasiliaTime.minute).padStart(2, "0")} — corte de 12h00 para entrega no mesmo dia
+            </p>
+            <p className="text-xs text-orange-700 mt-0.5">
+              A frota interna não garante entrega hoje. Ao criar a solicitação urgente,
+              você será solicitado a escolher entre <strong>Lalamove</strong>,
+              reagendar para amanhã ou solicitar exceção.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* ── BANNER: corte 17h30 ── */}
       {cutoffStatus?.isAfterFirst && (step as Step) !== "DONE" && (step as Step) !== "DUPLICATE" && (
         <div className="bg-amber-50 border border-amber-300 rounded-xl px-4 py-3 flex items-start gap-3">
           <Clock className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />

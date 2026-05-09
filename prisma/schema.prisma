@@ -47,6 +47,14 @@ enum DispatchWindow {
   EXPRESS          // Lalamove / urgente — ignora janela de corte
 }
 
+// nível de SLA da entrega — complementar a deliveryType
+enum SLAType {
+  STANDARD   // D+1 — rota interna padrão
+  URGENT     // D+0 — frota interna (sujeito ao corte das 12h)
+  EXPRESS    // D+0 — via Lalamove/parceiro (ignora corte)
+  SCHEDULED  // data específica informada pelo operador
+}
+
 enum TransferStatus {
   PENDING      // criada, aguardando aprovação
   APPROVED     // aprovada pelo operador
@@ -377,11 +385,17 @@ model DeliveryRequest {
   totalValue      Float?
   notes           String?
   scheduledFor    DateTime?
-  // janela de despacho — regra de corte horário
+  // janela de despacho — regra de corte 17h30
   dispatchWindow        DispatchWindow?    // calculada na criação; EXPRESS ignora corte
   cutoffWarningShownAt  DateTime?          // quando o aviso de corte foi exibido
   cutoffApprovedBy      String?            // userId do gestor que aprovou exceção
   cutoffApprovalReason  String?            // motivo informado pelo vendedor ao solicitar exceção
+  // SLA e corte same-day (12h00)
+  slaType               SLAType           @default(STANDARD)
+  sameDayRequested      Boolean           @default(false) // vendedor solicitou entrega hoje após 12h
+  sameDayApprovedBy     String?           // userId do gestor que aprovou a exceção same-day
+  sameDayApprovalReason String?           // motivo da exceção informado pelo vendedor
+  sameDayRequestedAt    DateTime?         // quando o pedido de exceção foi feito
   // rastreio de tentativas de vínculo automático PD → NF
   nfLinkLastAttemptAt DateTime?         // quando foi a última tentativa
   nfLinkAttemptCount  Int      @default(0) // quantas tentativas já foram feitas

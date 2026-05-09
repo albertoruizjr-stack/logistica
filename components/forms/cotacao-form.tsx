@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { Loader2, Calculator, AlertCircle, CheckCircle2, Clock, Zap, Truck, MapPin, Search, Package } from "lucide-react";
+import { Loader2, Calculator, AlertCircle, CheckCircle2, Clock, Zap, Truck, MapPin, Search, Package, AlertTriangle } from "lucide-react";
 import { cn, formatCurrency, formatDistance } from "@/lib/utils";
 import { SolicitarEntregaDrawer } from "@/components/cotacao/solicitar-entrega-drawer";
 import { getCutoffStatus, FIRST_CUTOFF, type CutoffStatus } from "@/lib/cutoff";
@@ -191,7 +191,23 @@ export function FreightQuoteForm({ stores, sessionStoreId }: Props) {
 
   return (
     <div className="space-y-4">
-      {/* ── BANNER DE CORTE HORÁRIO ── */}
+      {/* ── BANNER: corte same-day 12h00 (urgente após meio-dia) ── */}
+      {cutoffStatus?.isAfterSecond && isUrgent && (
+        <div className="bg-orange-50 border border-orange-300 rounded-xl px-4 py-3 flex items-start gap-3">
+          <AlertTriangle className="w-5 h-5 text-orange-600 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-semibold text-orange-900">
+              São {cutoffStatus.brasiliaTime.hour}h{String(cutoffStatus.brasiliaTime.minute).padStart(2, "0")} — corte de 12h00 para same-day atingido
+            </p>
+            <p className="text-xs text-orange-700 mt-0.5">
+              A frota interna não garante entrega hoje. Para entregar hoje, use{" "}
+              <strong>entrega expressa via Lalamove</strong> ao criar a solicitação.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* ── BANNER: corte 17h30 (despacho padrão) ── */}
       {cutoffStatus?.isAfterFirst && (
         <div className="bg-amber-50 border border-amber-300 rounded-xl px-4 py-3 flex items-start gap-3">
           <Clock className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />

@@ -6,7 +6,7 @@ import { TRANSFER_PRIORITY_LABELS, TRANSFER_PRIORITY_COLORS } from "@/lib/consta
 import {
   Truck, ArrowLeftRight, Clock, CheckCircle,
   AlertTriangle, TrendingUp, Users, Package,
-  DollarSign, AlertOctagon, ChevronRight,
+  DollarSign, AlertOctagon, ChevronRight, Zap,
   type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
@@ -53,6 +53,10 @@ export default async function DashboardPage() {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
+  // Início do dia às 12h (horário de Brasília = UTC-3, então 12h BRT = 15h UTC)
+  const todayNoon = new Date(today);
+  todayNoon.setUTCHours(15, 0, 0, 0); // 15h UTC = 12h Brasília
+
   const [
     pendingDeliveries,
     deliveriesToday,
@@ -70,6 +74,9 @@ export default async function DashboardPage() {
     oldestPendingDispatch,
     oldestUrgentTransfer,
     oldestPendingJustification,
+    sameDayToday,
+    sameDayAfterCutoff,
+    sameDayExceptionsToday,
   ] = await Promise.all([
     prisma.deliveryRequest.count({ where: { status: { in: ["PENDING", "AWAITING_ITEMS", "AWAITING_TRANSFER", "READY"] } } }),
     prisma.deliveryRequest.count({ where: { createdAt: { gte: today } } }),
@@ -123,6 +130,16 @@ export default async function DashboardPage() {
       where: { createdAt: { gte: today }, justificationRequired: true, justification: null },
       orderBy: { createdAt: "asc" },
       select: { createdAt: true },
+    }),
+    // same-day KPIs — requerem schema migrado (campos slaType, sameDayRequested)
+    prisma.deliveryRequest.count({
+      where: { createdAt: { gte: today }, deliveryType: "URGENT" },
+    }),
+    prisma.deliveryRequest.count({
+      where: { createdAt: { gte: todayNoon }, deliveryType: "URGENT" },
+    }),
+    prisma.deliveryRequest.count({
+      where: { createdAt: { gte: today }, sameDayRequested: true },
     }),
   ]);
 
@@ -251,6 +268,36 @@ export default async function DashboardPage() {
           <KpiLink href="/auditoria?pendente=true" label="Justific. Pendentes" value={pendingJustifications} icon={AlertOctagon} variant={pendingJustifications > 0 ? "danger" : "default"} />
         </div>
       </div>
+
+      {/* SAME DAY */}
+      {sameDayToday > 0 && (
+        <div className="mb-6">
+          <SectionLabel>Same Day</SectionLabel>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+            <KpiLink
+              href="/solicitacoes?deliveryType=URGENT"
+              label="Urgentes hoje"
+              value={sameDayToday}
+              icon={Zap}
+              variant={sameDayToday > 0 ? "urgent" : "default"}
+            />
+            <KpiLink
+              href="/solicitacoes?deliveryType=URGENT"
+              label="Urgentes após 12h"
+              value={sameDayAfterCutoff}
+              icon={Clock}
+              variant={sameDayAfterCutoff > 0 ? "warning" : "default"}
+            />
+            <KpiLink
+              href="/solicitacoes?sameDayRequested=true"
+              label="Exceções same-day"
+              value={sameDayExceptionsToday}
+              icon={AlertTriangle}
+              variant={sameDayExceptionsToday > 0 ? "danger" : "default"}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Desvio médio — só exibe quando há cotações no dia */}
       {auditSummary._count.id > 0 && (
