@@ -2,7 +2,8 @@
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
-import { AlertTriangle, Clock, Siren } from "lucide-react";
+import Link from "next/link";
+import { AlertTriangle, Clock, Siren, PackageCheck, ArrowRight } from "lucide-react";
 import { PageHeader } from "@/components/ui";
 import { MetricCard } from "@/components/ui/metric-card";
 import { StoreHealthCard } from "./_components/store-health-card";
@@ -14,11 +15,12 @@ const HEALTH_ORDER: Record<StoreHealthColor, number> = { RED: 0, YELLOW: 1, GREE
 export default async function TorreDashboardPage() {
   const session = await getSession();
   if (!session) redirect("/login");
-  if (!["ADMIN", "OPERATOR"].includes(session.role)) redirect("/dashboard");
+  if (!["ADMIN", "OPERATOR", "STOCK_OPERATOR", "LOGISTICS_OPERATOR", "STORE_LEADER"].includes(session.role)) redirect("/dashboard");
 
   const OPEN_STATUSES = ["PENDING", "IN_PROGRESS", "NEEDS_MANUAL_CONFIRMATION"] as const;
 
-  const [openAlerts, stores, lastSync, overdueCount] = await Promise.all([
+  const since30d = new Date(Date.now() - 30 * 86_400_000);
+  const [openAlerts, stores, lastSync, overdueCount, divergenceStats] = await Promise.all([
     // Alertas abertos com contagem de itens e data de criação
     prisma.controlTowerAlert.findMany({
       where: { status: { in: [...OPEN_STATUSES] } },
@@ -42,7 +44,16 @@ export default async function TorreDashboardPage() {
     prisma.controlTowerAlert.count({
       where: { status: { in: ["PENDING", "IN_PROGRESS"] }, slaStatus: "OVERDUE" },
     }),
+    prisma.$queryRawUnsafe<Array<{ events: bigint; skus: bigint }>>(
+      `SELECT COUNT(*) AS events, COUNT(DISTINCT "productCode") AS skus
+         FROM stock_divergence_log
+         WHERE "resolvedAt" >= $1`,
+      since30d,
+    ),
   ]);
+
+  const divergenceEvents = Number(divergenceStats[0]?.events ?? 0);
+  const divergenceSkus   = Number(divergenceStats[0]?.skus   ?? 0);
 
   // Agrega por loja: contadores, item count e data do alerta mais antigo
   const storeMap = new Map<string, {
@@ -121,6 +132,45 @@ export default async function TorreDashboardPage() {
           variant={redStores > 0 ? "danger" : yellowStores > 0 ? "warning" : "default"}
         />
       </div>
+
+      {/* Atalho: Divergências de estoque (Citel × físico) */}
+      <Link
+        href="/torre/divergencias"
+        className="block mb-8 rounded-xl px-5 py-4 transition-colors group"
+        style={{
+          backgroundColor: divergenceEvents > 0 ? "rgba(99,102,241,0.04)" : "#FAFAFA",
+          border: `1px solid ${divergenceEvents > 0 ? "rgba(99,102,241,0.20)" : "var(--color-border)"}`,
+        }}
+      >
+        <div className="flex items-center gap-4">
+          <div
+            className="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0"
+            style={{
+              backgroundColor: divergenceEvents > 0 ? "rgba(99,102,241,0.10)" : "#F4F4F4",
+              color: divergenceEvents > 0 ? "#4338CA" : "#737373",
+            }}
+          >
+            <PackageCheck className="w-5 h-5" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p
+              className="text-[13px] font-semibold"
+              style={{ color: "var(--color-body-text)", fontFamily: "var(--font-display)" }}
+            >
+              Divergências de Estoque
+            </p>
+            <p className="text-[11.5px] mt-0.5" style={{ color: "#737373" }}>
+              {divergenceEvents > 0
+                ? `${divergenceEvents} evento${divergenceEvents > 1 ? "s" : ""} em ${divergenceSkus} SKU${divergenceSkus > 1 ? "s" : ""} nos últimos 30 dias`
+                : "Sem divergências registradas nos últimos 30 dias"}
+            </p>
+          </div>
+          <ArrowRight
+            className="w-4 h-4 transition-transform group-hover:translate-x-1"
+            style={{ color: "#A3A3A3" }}
+          />
+        </div>
+      </Link>
 
       {/* Cabeçalho da lista */}
       <div className="flex items-center gap-4 mb-3">

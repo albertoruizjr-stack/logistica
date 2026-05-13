@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
@@ -15,6 +16,9 @@ import {
   LogOut,
   Radar,
   AlertTriangle,
+  MonitorDot,
+  ClipboardList,
+  Map,
   type LucideIcon,
 } from "lucide-react";
 
@@ -40,38 +44,56 @@ const NAV_GROUPS: NavGroup[] = [
         href: "/dashboard",
         label: "Dashboard Logístico",
         icon: LayoutDashboard,
-        roles: ["ADMIN", "OPERATOR", "SELLER", "DRIVER"],
+        roles: ["ADMIN", "OPERATOR", "STOCK_OPERATOR", "LOGISTICS_OPERATOR", "STORE_LEADER", "SELLER", "DRIVER"],
       },
       {
         href: "/cotacao",
-        label: "Cotação de Frete",
+        label: "Nova Cotação",
         icon: Calculator,
-        roles: ["ADMIN", "OPERATOR", "SELLER"],
+        roles: ["ADMIN", "OPERATOR", "STOCK_OPERATOR", "LOGISTICS_OPERATOR", "STORE_LEADER", "SELLER"],
+      },
+      {
+        href: "/cotacoes",
+        label: "Cotações Salvas",
+        icon: ClipboardList,
+        roles: ["ADMIN", "OPERATOR", "STOCK_OPERATOR", "LOGISTICS_OPERATOR", "STORE_LEADER", "SELLER"],
       },
       {
         href: "/solicitacoes",
         label: "Solicitações",
         icon: FileText,
-        roles: ["ADMIN", "OPERATOR", "SELLER"],
+        roles: ["ADMIN", "OPERATOR", "STOCK_OPERATOR", "LOGISTICS_OPERATOR", "STORE_LEADER", "SELLER"],
         showUrgentBadge: true,
       },
       {
         href: "/transferencias",
         label: "Transferências",
         icon: ArrowLeftRight,
-        roles: ["ADMIN", "OPERATOR"],
+        roles: ["ADMIN", "OPERATOR", "STOCK_OPERATOR", "LOGISTICS_OPERATOR", "STORE_LEADER"],
       },
       {
         href: "/rastreamento",
         label: "Rastreamento",
         icon: MapPin,
-        roles: ["ADMIN", "OPERATOR"],
+        roles: ["ADMIN", "OPERATOR", "STOCK_OPERATOR", "LOGISTICS_OPERATOR", "STORE_LEADER"],
+      },
+      {
+        href: "/roteirizacao",
+        label: "Roteirização",
+        icon: Map,
+        roles: ["ADMIN", "OPERATOR", "LOGISTICS_OPERATOR"],
       },
       {
         href: "/despacho",
         label: "Despacho",
         icon: Truck,
-        roles: ["ADMIN", "OPERATOR"],
+        roles: ["ADMIN", "OPERATOR", "STOCK_OPERATOR", "LOGISTICS_OPERATOR", "STORE_LEADER"],
+      },
+      {
+        href: "/operacao",
+        label: "Fila Operacional",
+        icon: MonitorDot,
+        roles: ["ADMIN", "OPERATOR", "STOCK_OPERATOR", "LOGISTICS_OPERATOR", "STORE_LEADER"],
       },
     ],
   },
@@ -82,14 +104,14 @@ const NAV_GROUPS: NavGroup[] = [
         href: "/torre",
         label: "Torre de Controle",
         icon: Radar,
-        roles: ["ADMIN", "OPERATOR"],
+        roles: ["ADMIN", "OPERATOR", "STOCK_OPERATOR", "LOGISTICS_OPERATOR", "STORE_LEADER"],
         matchExact: true,
       },
       {
         href: "/torre/ruptura",
         label: "Ruptura",
         icon: AlertTriangle,
-        roles: ["ADMIN", "OPERATOR"],
+        roles: ["ADMIN", "OPERATOR", "STOCK_OPERATOR", "LOGISTICS_OPERATOR", "STORE_LEADER"],
       },
     ],
   },
@@ -100,7 +122,13 @@ const NAV_GROUPS: NavGroup[] = [
         href: "/auditoria",
         label: "Auditoria",
         icon: BarChart3,
-        roles: ["ADMIN", "OPERATOR"],
+        roles: ["ADMIN", "OPERATOR", "STOCK_OPERATOR", "LOGISTICS_OPERATOR", "STORE_LEADER"],
+      },
+      {
+        href: "/admin/motoristas",
+        label: "Motoristas",
+        icon: Truck,
+        roles: ["ADMIN", "OPERATOR", "LOGISTICS_OPERATOR"],
       },
     ],
   },
@@ -129,6 +157,22 @@ export function Sidebar({
   collapsed = false,
 }: SidebarProps) {
   const pathname = usePathname();
+  const [badges, setBadges] = useState<Record<string, number>>({});
+
+  // Poll de badges a cada 30s. Não bloqueia render.
+  useEffect(() => {
+    let stopped = false;
+    async function load() {
+      try {
+        const res = await fetch("/api/badges", { cache: "no-store" });
+        const json = await res.json();
+        if (!stopped && json.success) setBadges(json.data.paths ?? {});
+      } catch { /* silencioso */ }
+    }
+    void load();
+    const t = setInterval(load, 30_000);
+    return () => { stopped = true; clearInterval(t); };
+  }, []);
 
   async function handleLogout() {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -193,7 +237,9 @@ export function Sidebar({
               <div className="space-y-0.5">
                 {visibleItems.map((item) => {
                   const isActive = isItemActive(pathname, item);
-                  const showBadge = item.showUrgentBadge && urgentCount > 0;
+                  const dynamicCount = badges[item.href] ?? 0;
+                  const showUrgent = item.showUrgentBadge && urgentCount > 0;
+                  const showCount  = dynamicCount > 0 && !showUrgent;
                   return (
                     <Link
                       key={item.href}
@@ -228,12 +274,23 @@ export function Sidebar({
                       {!collapsed && (
                         <>
                           <span className="flex-1">{item.label}</span>
-                          {showBadge && (
+                          {showUrgent && (
                             <span
                               className="text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[18px] text-center leading-none"
                               style={{ backgroundColor: "#F97316" }}
                             >
                               {urgentCount}
+                            </span>
+                          )}
+                          {showCount && (
+                            <span
+                              className="text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[18px] text-center leading-none"
+                              style={{
+                                backgroundColor: "rgba(255,255,255,0.10)",
+                                color: isActive ? "white" : "#999",
+                              }}
+                            >
+                              {dynamicCount > 99 ? "99+" : dynamicCount}
                             </span>
                           )}
                         </>

@@ -11,11 +11,13 @@ import type {
   CostConfig,
   LalamoveStop,
   FreightDecisionResult,
+  DecisionContext,
 } from "@/types";
 import { calculateHaversineDistance } from "@/lib/utils";
 import { INTERNAL_VEHICLE_MARGINS, LALAMOVE_PRICE_MARGIN } from "@/lib/constants";
-import { resolveRoute }       from "@/lib/route-resolver";
-import { getLalamoveQuote }   from "@/services/lalamove.service";
+import { resolveRoute }          from "@/lib/route-resolver";
+import { getLalamoveQuote }      from "@/services/lalamove.service";
+import { getDriversWithETA }     from "@/services/driver-eta.service";
 
 // ──────────────────────────────────────────────
 // PASSO 1 — CLASSIFICAÇÃO DA CARGA
@@ -116,10 +118,11 @@ export function scoreDriverForDelivery(
 export interface DecisionParams {
   internalVehicle: InternalVehicleType | "EXCEPTION";
   lalamoveVehicle: LalamoveServiceType | "EXCEPTION";
-  bestDriver: { id: string; name: string; score: number } | null;
+  bestDriver: { id: string; name: string; score: number; minutesUntilFree: number } | null;
   internalCost: number;
   lalamoveCost: number | null;
   isUrgent:     boolean;
+  ctx:          DecisionContext;  // contexto de tempo/janela de despacho
 }
 
 export interface ModalDecisionResult {
@@ -128,35 +131,53 @@ export interface ModalDecisionResult {
   driverId?:                string;
   requiresManualAssignment: boolean;
   reason:                   string;
+  consolidationNote?:       string;  // sugestão de consolidação para D+1
 }
+
+// Threshold: acima deste tempo de espera, não compensa aguardar frota própria em entrega urgente
+const MAX_URGENT_WAIT_MIN = 20;
 
 export function decideBestDeliveryOption(p: DecisionParams): ModalDecisionResult {
   const internalOk = p.internalVehicle !== "EXCEPTION" && p.bestDriver !== null;
   const lalamoveOk = p.lalamoveVehicle !== "EXCEPTION" && p.lalamoveCost !== null;
 
-  // Regra 1: urgente + Lalamove disponível e não muito mais caro → Lalamove
-  if (p.isUrgent && lalamoveOk && p.lalamoveCost! < p.internalCost * 1.2) {
+  // Regra 0: same-day após corte das 12h → EXPRESS via Lalamove sem avaliar custo
+  if (p.ctx.isSameDayAfterCutoff && p.isUrgent) {
+    if (lalamoveOk) {
+      return {
+        mode: "LALAMOVE",
+        vehicle: p.lalamoveVehicle as LalamoveServiceType,
+        requiresManualAssignment: false,
+        reason: `Same-day após corte — Lalamove express obrigatório (R$ ${p.lalamoveCost!.toFixed(2)})`,
+      };
+    }
+    // Lalamove indisponível: frota própria mas com urgência máxima
+    if (internalOk) {
+      return {
+        mode: "INTERNAL",
+        vehicle: p.internalVehicle as InternalVehicleType,
+        driverId: p.bestDriver!.id,
+        requiresManualAssignment: false,
+        reason: `Same-day após corte — frota própria (Lalamove indisponível), motorista ${p.bestDriver!.name}`,
+      };
+    }
+  }
+
+  // Regra 1: urgente + motorista ocupado por mais de MAX_URGENT_WAIT_MIN → Lalamove
+  const driverTooLong = p.bestDriver !== null && p.bestDriver.minutesUntilFree > MAX_URGENT_WAIT_MIN;
+  if (p.isUrgent && lalamoveOk && (driverTooLong || !internalOk)) {
     return {
       mode: "LALAMOVE",
       vehicle: p.lalamoveVehicle as LalamoveServiceType,
       requiresManualAssignment: false,
-      reason: `Urgente — Lalamove (R$ ${p.lalamoveCost!.toFixed(2)}) preferido vs interno (R$ ${p.internalCost.toFixed(2)})`,
+      reason: driverTooLong
+        ? `Urgente — motorista ocupado por ~${Math.round(p.bestDriver!.minutesUntilFree)} min; Lalamove mais rápido (R$ ${p.lalamoveCost!.toFixed(2)})`
+        : `Urgente — nenhum motorista disponível; Lalamove (R$ ${p.lalamoveCost!.toFixed(2)})`,
     };
   }
 
-  // Regra 2: motorista com score ≥ 60 e custo interno ≤ Lalamove → interno
-  if (internalOk && p.bestDriver!.score >= 60 && (!lalamoveOk || p.internalCost <= p.lalamoveCost!)) {
-    return {
-      mode: "INTERNAL",
-      vehicle: p.internalVehicle as InternalVehicleType,
-      driverId: p.bestDriver!.id,
-      requiresManualAssignment: false,
-      reason: `${p.bestDriver!.name} disponível (score ${p.bestDriver!.score}) — custo interno R$ ${p.internalCost.toFixed(2)}`,
-    };
-  }
-
-  // Regra 3: Lalamove mais barato
-  if (lalamoveOk && internalOk && p.lalamoveCost! < p.internalCost) {
+  // Regra 2: custo — Lalamove claramente mais barato (>10% de economia) → Lalamove
+  if (lalamoveOk && p.lalamoveCost! < p.internalCost * 0.9) {
     return {
       mode: "LALAMOVE",
       vehicle: p.lalamoveVehicle as LalamoveServiceType,
@@ -165,17 +186,35 @@ export function decideBestDeliveryOption(p: DecisionParams): ModalDecisionResult
     };
   }
 
-  // Regra 4: sem motorista → Lalamove
+  // Regra 3: motorista com score alto e custo interno ≤ Lalamove → interno
+  if (internalOk && p.bestDriver!.score >= 60 && (!lalamoveOk || p.internalCost <= p.lalamoveCost!)) {
+    const waitNote = p.bestDriver!.minutesUntilFree > 0
+      ? ` (livre em ~${Math.round(p.bestDriver!.minutesUntilFree)} min)`
+      : "";
+    const consolidationNote = !p.isUrgent && p.ctx.dispatchWindow === "FIRST_DISPATCH"
+      ? "Considere consolidar com outras entregas D+1 no primeiro despacho para reduzir custo por entrega."
+      : undefined;
+    return {
+      mode: "INTERNAL",
+      vehicle: p.internalVehicle as InternalVehicleType,
+      driverId: p.bestDriver!.id,
+      requiresManualAssignment: false,
+      reason: `${p.bestDriver!.name}${waitNote}, score ${p.bestDriver!.score} — custo interno R$ ${p.internalCost.toFixed(2)}`,
+      consolidationNote,
+    };
+  }
+
+  // Regra 4: sem motorista com score suficiente → Lalamove
   if (!internalOk && lalamoveOk) {
     return {
       mode: "LALAMOVE",
       vehicle: p.lalamoveVehicle as LalamoveServiceType,
       requiresManualAssignment: false,
-      reason: "Nenhum motorista disponível — usando Lalamove",
+      reason: "Nenhum motorista com score suficiente — usando Lalamove",
     };
   }
 
-  // Regra 5: Lalamove indisponível + motorista disponível → interno
+  // Regra 5: Lalamove indisponível + motorista disponível (qualquer score) → interno
   if (internalOk && !lalamoveOk) {
     return {
       mode: "INTERNAL",
@@ -186,7 +225,7 @@ export function decideBestDeliveryOption(p: DecisionParams): ModalDecisionResult
     };
   }
 
-  // Regra 6: nada disponível → interno com atribuição manual
+  // Regra 6: nada disponível → atribuição manual
   return {
     mode: "INTERNAL",
     vehicle: InternalVehicleType.FIORINO,
@@ -295,18 +334,22 @@ export async function makeFreightDecision(
   // 3. Rota
   const route = await resolveRoute(input.originLat, input.originLng, input.destLat, input.destLng);
 
-  // 4. Custo interno
-  const internalCost = calculateInternalCost(route, cfg);
+  // 4. Custo interno — usa duração com trânsito quando disponível (mais precisa)
+  const effectiveDurationMin = route.durationInTrafficMin ?? route.durationMin;
+  const internalCost = calculateInternalCost({ ...route, durationMin: effectiveDurationMin }, cfg);
 
-  // 5. Motoristas disponíveis (só se frota própria é viável)
-  const driverCandidates = cargo.internalVehicle !== "EXCEPTION"
-    ? await getAvailableDrivers(input.storeId, cfg.DRIVER_MAX_LOCATION_AGE_MIN ?? 30)
+  // 5. Motoristas com ETA real (score inclui tempo de espera + proximidade)
+  const driversWithETA = cargo.internalVehicle !== "EXCEPTION"
+    ? await getDriversWithETA(input.storeId, input.originLat, input.originLng)
     : [];
 
-  const scoredDrivers = driverCandidates
-    .map((d) => ({ ...d, score: scoreDriverForDelivery(d, input.originLat, input.originLng, input.destLat, input.destLng) }))
+  const ranked = driversWithETA
+    .filter((d) => d.score > 0)
     .sort((a, b) => b.score - a.score);
-  const bestDriver = scoredDrivers[0] ?? null;
+
+  const bestDriver = ranked[0]
+    ? { id: ranked[0].driverId, name: ranked[0].driverName, score: ranked[0].score, minutesUntilFree: ranked[0].minutesUntilFree }
+    : null;
 
   // 6. Cotação Lalamove (não bloqueia em caso de erro)
   let lalamoveCost: number | null = null;
@@ -338,7 +381,18 @@ export async function makeFreightDecision(
     }
   }
 
-  // 7. Decisão de modal
+  // 7. Decisão de modal — com contexto de ETA e janela de despacho
+  const now = new Date();
+  const sameDayCutoff = new Date();
+  sameDayCutoff.setHours(12, 0, 0, 0);
+  const isSameDayAfterCutoff = input.isUrgent && now >= sameDayCutoff;
+
+  const ctx: DecisionContext = {
+    driverEtaMin:         bestDriver?.minutesUntilFree ?? null,
+    isSameDayAfterCutoff,
+    dispatchWindow:       input.isUrgent ? "EXPRESS" : now.getHours() < 17 ? "FIRST_DISPATCH" : "SECOND_DISPATCH",
+  };
+
   const decision = decideBestDeliveryOption({
     internalVehicle: cargo.internalVehicle,
     lalamoveVehicle: cargo.lalamoveVehicle,
@@ -346,6 +400,7 @@ export async function makeFreightDecision(
     internalCost,
     lalamoveCost,
     isUrgent: input.isUrgent,
+    ctx,
   });
 
   // 8. Zona de frete + preço ao cliente
@@ -374,13 +429,15 @@ export async function makeFreightDecision(
     driverId:                 decision.driverId,
     requiresManualAssignment: decision.requiresManualAssignment,
     lalamoveQuote,
-    distanceKm:      route.distanceKm,
-    durationMinutes: route.durationMin,
-    isApproximate:   route.isApproximate,
+    distanceKm:               route.distanceKm,
+    durationMinutes:          effectiveDurationMin,
+    durationInTrafficMinutes: route.durationInTrafficMin ?? null,
+    isApproximate:            route.isApproximate,
     internalCost,
     lalamoveCost,
     suggestedPrice,
-    decisionReason: decision.reason,
+    decisionReason:           decision.reason,
+    consolidationNote:        decision.consolidationNote,
   };
 
   // 9. Log assíncrono — não bloqueia a resposta

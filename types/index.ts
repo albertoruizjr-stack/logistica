@@ -112,13 +112,208 @@ export interface FreightDecisionResult {
     estimatedPrice: number
     serviceType:    LalamoveServiceType
   }
-  distanceKm:      number
-  durationMinutes: number
-  isApproximate:   boolean
-  internalCost:    number
-  lalamoveCost:    number | null
-  suggestedPrice:  number
-  decisionReason:  string
+  distanceKm:               number
+  durationMinutes:          number          // com trânsito quando disponível
+  durationInTrafficMinutes: number | null   // null = trânsito não disponível
+  isApproximate:            boolean
+  internalCost:             number
+  lalamoveCost:             number | null
+  suggestedPrice:           number
+  decisionReason:           string
+  consolidationNote?:       string   // sugestão de consolidação D+1 (opcional)
+}
+
+// ──────────────────────────────────────────────
+// ETA DE MOTORISTAS
+// ──────────────────────────────────────────────
+
+export interface DriverETAResult {
+  driverId:          string
+  driverName:        string
+  vehicleType:       string | null
+  currentLat:        number | null
+  currentLng:        number | null
+  isLocationFresh:   boolean        // localização recente (< 30 min)
+  activeDeliveries:  number
+  minutesUntilFree:  number         // 0 = disponível agora
+  estimatedFreeAt:   Date
+  score:             number         // score composto (0-100) para seleção — ver scoreDriverWithETA
+}
+
+// ──────────────────────────────────────────────
+// MOTOR DE DECISÃO — PARÂMETROS ESTENDIDOS
+// ──────────────────────────────────────────────
+
+export type ModalRecommendation = "INTERNAL" | "LALAMOVE" | "EXPRESS" | "CONSOLIDATE"
+
+export type DeliveryRisk = "LOW" | "MEDIUM" | "HIGH"
+
+export interface DecisionContext {
+  driverEtaMin:     number | null   // minutos até o melhor motorista estar livre (null = nenhum)
+  isSameDayAfterCutoff: boolean     // same-day solicitado após 12h
+  dispatchWindow:   "FIRST_DISPATCH" | "SECOND_DISPATCH" | "EXPRESS" | null
+}
+
+// ──────────────────────────────────────────────
+// WORKQUEUE
+// ──────────────────────────────────────────────
+
+export interface WorkqueueItem {
+  deliveryRequestId:     string
+  customerName:          string
+  deliveryAddress:       string
+  deliveryType:          DeliveryType
+  status:                DeliveryRequestStatus
+  dispatchWindow:        string | null
+  distanceKm:            number | null
+  durationMin:           number | null         // com trânsito quando disponível
+  etaMinutes:            number | null         // minutos até entrega estimada
+  etaAt:                 Date   | null         // timestamp estimado de entrega
+  modalRecommendation:   ModalRecommendation
+  suggestedDriverId:     string | null
+  suggestedDriverName:   string | null
+  delayRisk:             DeliveryRisk
+  delayReason:           string | null
+  recommendationReason:  string
+  isUrgent:              boolean
+  createdAt:             Date
+}
+
+// ──────────────────────────────────────────────
+// PLANEJAMENTO DE SEGUNDO DESPACHO
+// ──────────────────────────────────────────────
+
+export interface DispatchPlanItem {
+  deliveryRequestId: string
+  customerName:      string
+  deliveryAddress:   string
+  distanceKm:        number | null
+  durationMin:       number | null
+  totalWeightKg:     number | null
+  totalLatas:        number | null
+  isUrgent:          boolean
+  priorityScore:     number         // mais alto = despachar primeiro
+}
+
+export interface DispatchPlanSummary {
+  window:              "FIRST_DISPATCH" | "SECOND_DISPATCH"
+  plannedDepartureAt:  Date
+  estimatedReturnAt:   Date
+  items:               DispatchPlanItem[]
+  totalDistanceKm:     number
+  totalDurationMin:    number
+  totalWeightKg:       number
+  totalLatas:          number
+  isOverCapacity:      boolean
+  capacityWarning:     string | null
+}
+
+// ──────────────────────────────────────────────
+// ANALYTICS — PRECISÃO DE ETA E MODAL
+// ──────────────────────────────────────────────
+
+export interface ETAAccuracyReport {
+  period:              { from: Date; to: Date }
+  totalDispatches:     number
+  withPrediction:      number
+  avgErrorMin:         number         // (previsto - real): positivo = adiantou, negativo = atrasou
+  p90ErrorMin:         number         // 90% dos erros ficam abaixo deste valor absoluto
+  lateDeliveries:      number         // entregas onde real > previsto
+  latePercent:         number
+}
+
+export interface ModalAccuracyReport {
+  period:              { from: Date; to: Date }
+  total:               number
+  matchCount:          number         // sugerido === real
+  matchPercent:        number
+  breakdown: {
+    suggested:  Record<string, number>
+    actual:     Record<string, number>
+    divergence: Array<{ suggested: string; actual: string; count: number }>
+  }
+  avgCostErrorPercent: number         // (custo_real - custo_previsto) / custo_previsto × 100
+}
+
+// ──────────────────────────────────────────────
+// VISÃO ESPACIAL OPERACIONAL — MAPA
+// ──────────────────────────────────────────────
+
+export type MarkerColor = "red" | "orange" | "blue" | "green" | "purple" | "gray"
+
+export interface MapStore {
+  id:      string
+  code:    string
+  name:    string
+  lat:     number
+  lng:     number
+  address: string
+}
+
+export interface MapDriver {
+  id:              string
+  name:            string
+  vehicleType:     string | null
+  lat:             number | null
+  lng:             number | null
+  isLocationFresh: boolean
+  minutesUntilFree: number
+  activeDeliveries: number
+  score:           number
+  storeId:         string
+  storeName:       string
+  color:           MarkerColor   // green=livre, orange=ocupado, red=sem localização
+}
+
+export interface MapDelivery {
+  id:                  string
+  customerName:        string
+  deliveryAddress:     string
+  lat:                 number | null
+  lng:                 number | null
+  status:              string
+  isUrgent:            boolean
+  delayRisk:           DeliveryRisk
+  modalRecommendation: ModalRecommendation | null
+  suggestedDriverId:   string | null
+  distanceKm:          number | null
+  storeId:             string
+  storeName:           string
+  color:               MarkerColor   // red=urgent, orange=high risk, blue=standard
+  createdAt:           Date
+}
+
+export interface HeatmapPoint {
+  lat:   number
+  lng:   number
+  count: number   // número de entregas nessa célula (~1.1km × 1.1km)
+}
+
+export interface MapSummary {
+  totalDeliveries:  number
+  urgentCount:      number
+  highRiskCount:    number
+  activeDrivers:    number
+  availableDrivers: number
+  inTransitCount:   number
+  pendingCount:     number
+}
+
+export interface MapViewData {
+  stores:    MapStore[]
+  drivers:   MapDriver[]
+  deliveries: MapDelivery[]
+  heatmap:   HeatmapPoint[]
+  summary:   MapSummary
+  updatedAt: Date
+}
+
+export interface MapFilters {
+  storeId:   string | null
+  modal:     ModalRecommendation | null
+  risk:      DeliveryRisk | null
+  driverId:  string | null
+  showUrgentOnly: boolean
 }
 
 // ──────────────────────────────────────────────
@@ -184,6 +379,14 @@ export type DriverWithLocation = Driver & {
 // DTOs — ENTRADA DE DADOS
 // ──────────────────────────────────────────────
 
+// Opção de entrega escolhida pelo vendedor na cotação
+export type DeliveryOption =
+  | "SAME_DAY"         // hoje via frota interna (sujeito ao corte das 12h)
+  | "TOMORROW_FIRST"   // amanhã 1º despacho (sujeito ao corte das 17h30)
+  | "TOMORROW_SECOND"  // amanhã 2º despacho
+  | "EXPRESS"          // Lalamove/99 — ignora horários de corte
+  | "SCHEDULED";       // data agendada pelo vendedor
+
 export interface FreightQuoteInput {
   storeId: string;
   originAddress: string;
@@ -192,21 +395,53 @@ export interface FreightQuoteInput {
   destAddress: string;
   destLat: number;
   destLng: number;
-  isUrgent: boolean;
+  deliveryOption: DeliveryOption;
+  scheduledFor?: string;          // ISO string — para deliveryOption=SCHEDULED
+  cutoffException?: boolean;
+  cutoffExceptionReason?: string;
+  city?: string;
+  state?: string;
+  quotedAddress?: string;
+  // legado — mantido para backward compat com solicitar-entrega-drawer
+  isUrgent?: boolean;
 }
 
 export interface FreightQuoteResult {
-  distanceKm: number;
-  durationMinutes: number;       // duração real de rota em minutos (ou estimativa)
-  isApproximate: boolean;        // true = fallback Haversine — dado não é rota real
-  warning?: string;              // mensagem de alerta quando isApproximate = true
-  zone: FreightZone | null;
-  suggestedPrice: number;
-  isUrgent: boolean;
-  urgentFactor: number | null;
-  estimatedDays: number;
-  deliveryType: DeliveryType;
-  underConsultation: boolean;
+  distanceKm:               number;
+  durationMinutes:          number;
+  durationMinutesNoTraffic: number;
+  durationInTrafficMinutes: number | null;
+  isApproximate:            boolean;
+  isTrafficFresh:           boolean;
+  warning?:                 string;
+  zone:                     FreightZone | null;
+  suggestedPrice:           number;
+  isUrgent:                 boolean;
+  urgentFactor:             number | null;
+  estimatedDays:            number;
+  deliveryType:             DeliveryType;
+  deliveryOption:           DeliveryOption;
+  dispatchWindowLabel:      string;          // ex: "1º Despacho (manhã D+1)"
+  underConsultation:        boolean;
+  quoteId?:                 string;          // preenchido após salvar
+  expiresAt?:               string;          // ISO — validade da cotação
+}
+
+// Item na listagem de cotações salvas
+export interface FreightQuoteSummary {
+  id:              string;
+  status:          string;
+  deliveryOption:  string;
+  destAddress:     string;
+  city?:           string;
+  state?:          string;
+  distanceKm:      number;
+  suggestedPrice:  number;
+  dispatchWindow?: string;
+  expiresAt?:      string;
+  createdAt:       string;
+  store:           { code: string; name: string };
+  createdBy:       { name: string };
 }
 
 export interface CreateDeliveryRequestInput {

@@ -40,6 +40,18 @@ export async function middleware(req: NextRequest) {
       return response;
     }
 
+    // Driver é restrito ao app do motorista — bloqueia todas as outras rotas.
+    if (payload.role === "DRIVER") {
+      const isDriverPath = pathname.startsWith("/motorista") || pathname.startsWith("/api/driver");
+      const isUniversal  = pathname.startsWith("/api/auth") || pathname.startsWith("/api/notifications");
+      if (!isDriverPath && !isUniversal) {
+        if (pathname.startsWith("/api/")) {
+          return NextResponse.json({ error: "Acesso restrito ao app do motorista", success: false }, { status: 403 });
+        }
+        return NextResponse.redirect(new URL("/motorista", req.url));
+      }
+    }
+
     return NextResponse.next();
   } catch {
     // falha inesperada no Edge Runtime — redireciona para login em vez de expor erro bruto

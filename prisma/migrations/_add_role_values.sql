@@ -1,0 +1,6 @@
+-- Adiciona novos valores ao enum Role (Postgres).
+-- IF NOT EXISTS para ser idempotente.
+
+ALTER TYPE "Role" ADD VALUE IF NOT EXISTS 'STOCK_OPERATOR';
+ALTER TYPE "Role" ADD VALUE IF NOT EXISTS 'LOGISTICS_OPERATOR';
+ALTER TYPE "Role" ADD VALUE IF NOT EXISTS 'BUYER';

@@ -14,6 +14,8 @@ export interface SolicitacaoRow {
   orderStoreCode: string | null;
   invoiceNumber: string | null;
   nfLinkError: string | null;
+  erpAlertCount: number;
+  erpAlertSeverity: string | null;
   isUrgent: boolean;
   itemCount: number;
   storeCode: string;
@@ -107,6 +109,22 @@ const columns: Column<SolicitacaoRow>[] = [
                   </span>
                 );
             }
+          })()}
+          {row.erpAlertCount > 0 && (() => {
+            const isCrit = row.erpAlertSeverity === "CRITICAL";
+            return (
+              <span
+                className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded whitespace-nowrap"
+                style={isCrit
+                  ? { backgroundColor: "rgba(220,38,38,0.10)", color: "#B91C1C" }
+                  : { backgroundColor: "rgba(217,119,6,0.10)", color: "#92400E" }
+                }
+                title={isCrit ? "Alerta crítico do ERP" : "Divergência detectada no ERP"}
+              >
+                <AlertTriangle className="w-2.5 h-2.5" />
+                {isCrit ? "ERP crítico" : `ERP ${row.erpAlertCount}x`}
+              </span>
+            );
           })()}
           <span className="text-xs text-slate-400">
             {row.status === "AWAITING_ITEMS"

@@ -97,19 +97,33 @@ export async function decideModal(params: {
 export async function createDispatch(input: CreateDispatchInput) {
   // ── FASE 1: transaction atômica — cria dispatch + atualiza status + cria audit ──
   const dispatch = await prisma.$transaction(async (tx) => {
+    // Calcula ETA previsto: agora + duração com trânsito (se disponível na cotação)
+    const quoteForETA = input.deliveryRequestId
+      ? await tx.deliveryRequest.findUnique({
+          where:  { id: input.deliveryRequestId },
+          select: { freightQuote: { select: { durationMinutes: true } } },
+        })
+      : null;
+    const durationMin = quoteForETA?.freightQuote?.durationMinutes ?? null;
+    const now = new Date();
+    const predictedDeliveryAt = durationMin
+      ? new Date(now.getTime() + durationMin * 60_000)
+      : null;
+
     const dispatch = await tx.dispatch.create({
       data: {
-        deliveryRequestId: input.deliveryRequestId,
-        transferId: input.transferId,
-        storeId: input.storeId,
-        modal: input.modal,
-        status: DispatchStatus.PENDING,
-        driverId: input.driverId,
-        routeId: input.routeId,
-        estimatedCost: input.estimatedCost,
-        dispatchedById: input.dispatchedById,
-        notes: input.notes,
-        dispatchedAt: new Date(),
+        deliveryRequestId:  input.deliveryRequestId,
+        transferId:         input.transferId,
+        storeId:            input.storeId,
+        modal:              input.modal,
+        status:             DispatchStatus.PENDING,
+        driverId:           input.driverId,
+        routeId:            input.routeId,
+        estimatedCost:      input.estimatedCost,
+        dispatchedById:     input.dispatchedById,
+        notes:              input.notes,
+        dispatchedAt:       now,
+        predictedDeliveryAt,
       },
       include: {
         deliveryRequest: true,

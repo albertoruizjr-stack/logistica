@@ -17,9 +17,21 @@ datasource db {
 
 enum Role {
   ADMIN
-  OPERATOR   // logística — pode despachar, ver tudo
-  SELLER     // vendedor — cria solicitações e cotações
-  DRIVER     // motorista — atualiza localização, confirma entregas
+  OPERATOR             // legado — equivale a LOGISTICS_OPERATOR. Mantido por compat até migração completa.
+  STOCK_OPERATOR       // operador de estoque — confirma transferências, gerencia separação
+  LOGISTICS_OPERATOR   // operador de logística — roteiriza, despacha, supervisiona motoristas
+  STORE_LEADER         // líder de loja — aprova transferências e separa mercadorias da SUA loja
+  SELLER               // vendedor — cria solicitações e cotações
+  BUYER                // comprador — gerencia compras e fornecedores
+  DRIVER               // motorista — atualiza localização, confirma entregas
+}
+
+enum FreightQuoteStatus {
+  DRAFT      // preenchida mas não calculada
+  QUOTED     // calculada e salva — válida até fim do dia
+  CONVERTED  // virou solicitação de entrega
+  EXPIRED    // validade encerrada
+  CANCELLED  // cancelada pelo vendedor
 }
 
 enum DeliveryType {
@@ -71,6 +83,7 @@ enum TransferStatus {
   PENDING      // criada, aguardando aprovação
   APPROVED     // aprovada pelo operador
   PREPARING    // loja de origem separando os itens
+  PREPARED     // separada — aguardando coleta pelo motorista
   IN_TRANSIT   // a caminho da loja de destino
   RECEIVED     // recebida na loja de destino
   CANCELLED    // cancelada
@@ -300,8 +313,34 @@ model User {
   auditSales           FreightAudit[]       @relation("AuditSeller")
   divergencesResolved  TransferDivergence[] @relation("DivergenceResolvedBy")
   alertsOwned          ControlTowerAlert[] @relation("AlertOwner")
+  notifications        Notification[]
+  routingWavesCreated  RoutingWave[]       @relation("RoutingWaveCreatedBy")
+  driver               Driver?             @relation("DriverUser")
+  deliveryProofs       DeliveryProof[]     @relation("ProofUploadedBy")
 
   @@map("users")
+}
+
+// ──────────────────────────────────────────────
+// NOTIFICAÇÕES IN-APP (sininho do header)
+// ──────────────────────────────────────────────
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  type      String    // ver constantes em lib/notifications-types.ts
+  title     String
+  body      String?
+  link      String?   // caminho relativo (ex: /solicitacoes/cuid123)
+  metadata  String?   // JSON arbitrário (orderId, transferId, ...)
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt])
+  @@index([createdAt])
+  @@map("notifications")
 }
 
 // ──────────────────────────────────────────────
@@ -330,7 +369,7 @@ model FreightZone {
 // ──────────────────────────────────────────────
 
 model FreightQuote {
-  id              String       @id @default(cuid())
+  id              String              @id @default(cuid())
   storeId         String
   originAddress   String
   originLat       Float
@@ -341,14 +380,31 @@ model FreightQuote {
   distanceKm      Float
   zoneId          String?
   suggestedPrice  Float
-  isUrgent        Boolean      @default(false)
+  isUrgent        Boolean             @default(false)
   urgentFactor    Float?
-  estimatedDays   Int          @default(1)  // 1 = amanhã, 0 = hoje
-  durationMinutes Float?                    // duração real de rota em minutos (Google Maps)
-  isApproximate   Boolean      @default(false) // true = distância via Haversine (fallback)
+  estimatedDays   Int                 @default(1)
+  durationMinutes Float?
+  isApproximate   Boolean             @default(false)
   deliveryType    DeliveryType
+
+  // ── campos v2: opção de entrega, status e validade ──────────
+  status          FreightQuoteStatus  @default(QUOTED)
+  deliveryOption  String?             // "SAME_DAY"|"TOMORROW_FIRST"|"TOMORROW_SECOND"|"EXPRESS"|"SCHEDULED"
+  slaType         SLAType?
+  dispatchWindow  DispatchWindow?
+  city            String?
+  state           String?
+  quotedAddress   String?             // endereço formatado pelo geocoder
+  expiresAt       DateTime?           // fim do dia quando foi criada
+  convertedAt     DateTime?
+  scheduledFor    DateTime?           // para deliveryOption=SCHEDULED
+  cutoffException Boolean             @default(false)
+  cutoffExceptionReason String?
+  // ────────────────────────────────────────────────────────────
+
   createdById     String
-  createdAt       DateTime     @default(now())
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
 
   store           Store           @relation(fields: [storeId], references: [id])
   zone            FreightZone?    @relation(fields: [zoneId], references: [id])
@@ -414,10 +470,38 @@ model DeliveryRequest {
   sameDayApprovedBy     String?           // userId do gestor que aprovou a exceção same-day
   sameDayApprovalReason String?           // motivo da exceção informado pelo vendedor
   sameDayRequestedAt    DateTime?         // quando o pedido de exceção foi feito
+  // bloqueio geográfico — endereço fora de SP
+  deliveryState         String?           // estado do endereço de entrega (ex: "SP", "RJ")
+  outsideSPApproved     Boolean           @default(false)
+  outsideSPApprovedBy   String?           // userId do ADMIN/OPERATOR que autorizou
+  outsideSPApprovalReason String?         // justificativa da exceção operacional
+  outsideSPApprovedAt   DateTime?         // quando a exceção foi concedida
   // rastreio de tentativas de vínculo automático PD → NF
   nfLinkLastAttemptAt DateTime?         // quando foi a última tentativa
   nfLinkAttemptCount  Int      @default(0) // quantas tentativas já foram feitas
   nfLinkError         String?            // PARTIAL_BILLING | MULTIPLE_NF | API_ERROR
+  // totais calculados a partir do snapshot Citel (preenchidos na criação)
+  totalWeightKg        Float?            // soma de grossWeight * quantity de todos os itens
+  totalLatas           Int?              // quantidade de itens em unidade BD/GL/LT
+  hasMissingWeights    Boolean @default(false) // algum item veio sem pesoBruto da Citel
+  stockValidationStatus String?          // VALIDATED | PARTIAL | UNAVAILABLE | CITEL_DOWN | PENDING
+  stockFetchedAt        DateTime?         // quando o snapshot Citel foi consultado
+  // endereços — snapshots no momento da solicitação
+  customerAddressSnapshot  String?       // JSON: CitelEndereco do cadastro do cliente
+  deliveryAddressSnapshot  String?       // JSON: CitelEndereco efetivo de entrega
+  deliveryAddressSource    String?       // ORDER_DELIVERY_ADDRESS | CUSTOMER_MAIN_ADDRESS | MANUAL_OVERRIDE
+  deliveryAddressOriginal  String?       // endereço Citel antes de override manual
+  deliveryAddressEditedById String?      // userId que fez o override manual
+  deliveryAddressEditedAt  DateTime?     // timestamp do override manual
+  // status do pedido no ERP no momento da criação
+  erpOrderStatus           String?       // status bruto da Citel ex: "APROVADO"
+  erpOrderValidationStatus String?       // VALID | CANCELLED | BLOCKED | APPROVAL_PENDING | ALREADY_FULFILLED
+  // lock operacional — controle de concorrência (claim system)
+  lockedBy       String?   // userId do operador com claim ativo
+  lockedByName   String?   // nome denormalizado (evita JOIN na workqueue)
+  lockedAt       DateTime? // quando o claim foi feito
+  lockExpiresAt  DateTime? // quando expira automaticamente
+  lockReason     String?   // SEPARACAO | FISCAL | ROTEIRIZACAO | DESPACHO | OCORRENCIA
   createdAt       DateTime              @default(now())
   updatedAt       DateTime              @updatedAt
 
@@ -431,9 +515,42 @@ model DeliveryRequest {
   dispatch     Dispatch?
   audit        FreightAudit?
   statusHistory DeliveryStatusHistory[]
+  snapshots     OperationalMetricsSnapshot[]
+  erpSyncAlerts ERPSyncAlert[]
+  proofs        DeliveryProof[]
 
   @@unique([orderNumber, orderStoreId])
   @@map("delivery_requests")
+}
+
+// ──────────────────────────────────────────────
+// COMPROVANTES DE ENTREGA
+// Fotos tiradas pelo motorista no momento da entrega (canhoto + material).
+// Armazenadas no Supabase Storage. URL fica no campo photoUrl, path no photoPath
+// pra possíveis URLs assinadas no futuro.
+// ──────────────────────────────────────────────
+
+enum DeliveryProofType {
+  RECEIPT     // canhoto assinado da NF
+  MATERIAL    // material entregue na obra
+  OCCURRENCE  // foto de ocorrência (recusa, dano, etc.)
+}
+
+model DeliveryProof {
+  id                String            @id @default(cuid())
+  deliveryRequestId String
+  type              DeliveryProofType
+  photoUrl          String            // URL pública (ou base) do Supabase Storage
+  photoPath         String            // path interno: "deliveryRequestId/timestamp_type.jpg"
+  uploadedById      String?           // User do motorista que fez o upload
+  notes             String?
+  createdAt         DateTime          @default(now())
+
+  deliveryRequest DeliveryRequest @relation(fields: [deliveryRequestId], references: [id], onDelete: Cascade)
+  uploadedBy      User?           @relation("ProofUploadedBy", fields: [uploadedById], references: [id])
+
+  @@index([deliveryRequestId, createdAt])
+  @@map("delivery_proofs")
 }
 
 // ──────────────────────────────────────────────
@@ -459,6 +576,38 @@ model DeliveryStatusHistory {
 }
 
 // ──────────────────────────────────────────────
+// SNAPSHOT DE MÉTRICAS OPERACIONAIS
+// Registra o tempo que cada solicitação ficou em
+// cada status. Fechado automaticamente pela state
+// machine a cada transição — base da observabilidade.
+// ──────────────────────────────────────────────
+
+model OperationalMetricsSnapshot {
+  id                String                @id @default(cuid())
+  deliveryRequestId String
+  status            DeliveryRequestStatus // status sendo medido
+  enteredAt         DateTime              // quando entrou neste status
+  exitedAt          DateTime?             // quando saiu (null = ainda neste status)
+  durationSeconds   Int?                  // exitedAt - enteredAt (calculado ao fechar)
+  operatorId        String?               // userId de quem acionou esta entrada (null = sistema)
+  operatorName      String?               // nome denormalizado
+  storeId           String
+  slaType           SLAType
+  deliveryType      DeliveryType
+  dispatchWindow    DispatchWindow?
+  createdAt         DateTime              @default(now())
+
+  deliveryRequest DeliveryRequest @relation(fields: [deliveryRequestId], references: [id], onDelete: Cascade)
+
+  @@index([deliveryRequestId, enteredAt])
+  @@index([status, enteredAt])              // analytics por status
+  @@index([storeId, enteredAt])             // analytics por loja
+  @@index([operatorId, enteredAt])          // analytics por operador
+  @@index([exitedAt])                       // cleanup de snapshots abertos
+  @@map("operational_metrics_snapshots")
+}
+
+// ──────────────────────────────────────────────
 // ITENS DA SOLICITAÇÃO
 // ──────────────────────────────────────────────
 
@@ -466,13 +615,27 @@ model DeliveryItem {
   id                String  @id @default(cuid())
   deliveryRequestId String
   productCode       String
-  productName       String
+  productName       String  // mantido por compatibilidade — use description para dados Citel
   quantity          Float
   unit              String  @default("UN")
+  // snapshot do produto (preenchido pela Citel no momento da criação)
+  description       String?          // descricao do produto no Citel
+  brand             String?          // marca
+  barcode           String?          // codigoBarra (EAN)
+  grossWeight       Float?           // pesoBruto em kg por unidade
+  totalWeight       Float?           // grossWeight * quantity
+  hasMissingWeight  Boolean @default(false) // true se pesoBruto não veio da Citel
+  // snapshot de estoque no momento da criação
+  availableStock    Float?           // saldoDisponivel na loja no momento da criação
+  physicalStock     Float?           // saldoFisico na loja no momento da criação
+  daysWithoutSale   Int?             // diasSemVenda
+  turnoverClass     String?          // giro (A, B, C)
+  stockStatus       String?          // AVAILABLE | RESERVED_ELSEWHERE | UNAVAILABLE | ZERO_STOCK | CITEL_DOWN
+  fetchedAt         DateTime?        // quando a Citel foi consultada
   // disponibilidade por loja
   availableAtStore  Boolean @default(true)
-  sourceStoreId     String?  // qual loja tem o item (pode ser diferente da loja de origem)
-  transferId        String?  // se precisou de transferência
+  sourceStoreId     String?          // qual loja tem o item
+  transferId        String?          // se precisou de transferência
   createdAt         DateTime @default(now())
 
   deliveryRequest DeliveryRequest @relation(fields: [deliveryRequestId], references: [id], onDelete: Cascade)
@@ -498,6 +661,7 @@ model Transfer {
   requestedAt       DateTime         @default(now())
   approvedAt        DateTime?
   preparingAt       DateTime?
+  preparedAt        DateTime?
   dispatchedAt      DateTime?
   receivedAt        DateTime?
   cancelledAt       DateTime?
@@ -555,12 +719,19 @@ model TransferItem {
   unit         String  @default("UN")
   sentQty      Float?  // quantidade enviada (pode ser menor)
   receivedQty  Float?  // quantidade confirmada no recebimento
+  // Vínculo com PD interno do Autcom (cliente Atual Tintas)
+  // Quando preenchido, indica que o Jhow já criou a transferência no ERP.
+  linkedCitelPD        String?
+  linkedCitelStoreCode String?
+  linkedAt             DateTime?
+  linkedById           String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
   transfer    Transfer             @relation(fields: [transferId], references: [id], onDelete: Cascade)
   divergences TransferDivergence[]
 
+  @@index([linkedCitelPD])
   @@map("transfer_items")
 }
 
@@ -589,6 +760,7 @@ model Dispatch {
   dispatchedById    String
   notes             String?
   dispatchedAt      DateTime?
+  predictedDeliveryAt DateTime?  // ETA calculado no momento do despacho
   completedAt       DateTime?
   failedAt          DateTime?
   failureReason     String?
@@ -612,18 +784,23 @@ model Dispatch {
 // ──────────────────────────────────────────────
 
 model Driver {
-  id           String  @id @default(cuid())
-  name         String
-  phone        String
-  storeId      String
-  vehicleType  String? // moto, carro, van, caminhão
-  licensePlate String?
-  active       Boolean @default(true)
-  available    Boolean @default(true)  // disponível para nova rota?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id            String  @id @default(cuid())
+  name          String
+  phone         String
+  email         String?  // necessário pra criar no Spoke
+  storeId       String
+  vehicleType   String? // moto, carro, van, caminhão
+  licensePlate  String?
+  spokeDriverId String?  @unique  // "drivers/abc..." retornado pelo Spoke
+  // userId: User com role=DRIVER que faz login no app motorista
+  userId        String?  @unique
+  active        Boolean @default(true)
+  available     Boolean @default(true)  // disponível para nova rota?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   store      Store           @relation(fields: [storeId], references: [id])
+  user       User?           @relation("DriverUser", fields: [userId], references: [id])
   dispatches Dispatch[]
   locations  DriverLocation[]
   routes     Route[]
@@ -657,19 +834,70 @@ model DriverLocation {
 // ──────────────────────────────────────────────
 
 model Route {
-  id          String   @id @default(cuid())
-  name        String?
-  driverId    String
-  date        DateTime
-  status      String   @default("ACTIVE")  // ACTIVE, COMPLETED, CANCELLED
-  spokeRouteId String?  // ID no sistema Spoke para sincronização
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id           String   @id @default(cuid())
+  name         String?
+  driverId     String
+  date         DateTime
+  status       String   @default("ACTIVE")  // ACTIVE, DISPATCHED, COMPLETED, CANCELLED
+  spokeRouteId String?  @unique             // "plans/.../routes/..."
+  waveId       String?                      // RoutingWave a que pertence
+  // Cache do response do Spoke pra renderizar manifest sem novo round-trip
+  manifestJson Json?                        // SpokeRoute completo (stops + ETAs)
+  sequenceJson Json?                        // [{ stopPosition, deliveryRequestId, eta }] simplificado
+  // Dados pra impressão
+  estimatedReturnAt DateTime?
+  totalWeightKg     Float?
+  stopCount         Int?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  driver     Driver     @relation(fields: [driverId], references: [id])
+  driver     Driver        @relation(fields: [driverId], references: [id])
+  wave       RoutingWave?  @relation(fields: [waveId], references: [id])
   dispatches Dispatch[]
 
   @@map("routes")
+}
+
+// ──────────────────────────────────────────────
+// ROUTING WAVE (= Plan no Spoke)
+// Representa um lote de pedidos enviados juntos pra otimização.
+// Uma wave gera N Routes (uma por motorista incluído).
+// ──────────────────────────────────────────────
+
+enum RoutingWaveStatus {
+  DRAFT          // criada localmente, ainda não enviada
+  SENT           // enviada ao Spoke (Plan criado)
+  OPTIMIZED      // otimização concluída
+  DISTRIBUTED    // distribuída aos motoristas, Routes criadas
+  DISPATCHED     // todos os motoristas saíram
+  COMPLETED      // todas entregas concluídas
+  FAILED         // erro em algum passo
+}
+
+model RoutingWave {
+  id              String            @id @default(cuid())
+  name            String            // "Manhã 13/05"
+  date            DateTime          // dia da operação
+  status          RoutingWaveStatus @default(DRAFT)
+  spokePlanId     String?           @unique  // "plans/abc"
+  // metadados
+  notes           String?
+  errorMessage    String?           // se status=FAILED
+  // estado intermediário do pipeline Spoke (operationId, driverIds, requestIds, etc.)
+  metadata        Json?
+  // controle
+  createdById     String
+  createdAt       DateTime          @default(now())
+  sentAt          DateTime?
+  optimizedAt     DateTime?
+  distributedAt   DateTime?
+  updatedAt       DateTime          @updatedAt
+
+  createdBy       User              @relation("RoutingWaveCreatedBy", fields: [createdById], references: [id])
+  routes          Route[]
+
+  @@index([date, status])
+  @@map("routing_waves")
 }
 
 // ──────────────────────────────────────────────
@@ -795,21 +1023,66 @@ model FreightAudit {
 // ──────────────────────────────────────────────
 
 model RouteCache {
-  id          String   @id @default(cuid())
-  // chave de lookup: coordenadas arredondadas a 4 casas (~11m) + período do dia
-  cacheKey    String   @unique // "{oLat4dp}_{oLng4dp}_{dLat4dp}_{dLng4dp}_{MORNING|AFTERNOON|EVENING}"
-  originLat   Float
-  originLng   Float
-  destLat     Float
-  destLng     Float
-  distanceKm  Float
-  durationMin Float    // duração em minutos
-  source      String   @default("GOOGLE_MAPS")
-  fetchedAt   DateTime @default(now())
-  expiresAt   DateTime // TTL dinâmico: ≤5km=7d · 5-15km=15d · >15km=30d
+  id                   String    @id @default(cuid())
+  cacheKey             String    @unique // "{oLat4dp}_{oLng4dp}_{dLat4dp}_{dLng4dp}"
+  originLat            Float
+  originLng            Float
+  destLat              Float
+  destLng              Float
+  distanceKm           Float
+  durationMin          Float     // duração sem trânsito (minutos)
+  durationInTrafficMin Float?    // duração com trânsito real (null = não disponível)
+  trafficExpiresAt     DateTime? // quando o dado de trânsito expira (10 min após fetch)
+  provider             String    @default("GOOGLE_ROUTES") // GOOGLE_ROUTES | HAVERSINE
+  fetchedAt            DateTime  @default(now())
+  expiresAt            DateTime  // TTL base: 24h
 
   @@index([cacheKey])
   @@map("route_cache")
+}
+
+// ──────────────────────────────────────────────
+// CACHE DE GEOCODIFICAÇÃO
+// Permanente — endereços raramente mudam de coordenadas.
+// ──────────────────────────────────────────────
+
+model GeocodingCache {
+  id               String   @id @default(cuid())
+  queryHash        String   @unique // SHA-256 da query normalizada (lowercase + trim)
+  placeId          String?           // Google Place ID
+  formattedAddress String
+  street           String?
+  streetNumber     String?
+  neighborhood     String?           // bairro
+  city             String
+  state            String
+  postalCode       String?
+  lat              Float
+  lng              Float
+  withinSP         Boolean  @default(true)
+  provider         String   @default("GOOGLE_GEOCODING") // GOOGLE_GEOCODING | NOMINATIM
+  cachedAt         DateTime @default(now())
+
+  @@map("geocoding_cache")
+}
+
+// ──────────────────────────────────────────────
+// LOG DE USO DA API DO GOOGLE MAPS
+// Contagem diária de chamadas — base para controle de custos.
+// ──────────────────────────────────────────────
+
+model MapsUsageLog {
+  id        String   @id @default(cuid())
+  endpoint  String   // COMPUTE_ROUTES | GEOCODE | ROUTE_CACHE_HIT | GEOCODE_CACHE_HIT | HAVERSINE_FALLBACK
+  cacheHit  Boolean  @default(false)
+  success   Boolean  @default(true)
+  storeId   String?
+  error     String?
+  createdAt DateTime @default(now())
+
+  @@index([endpoint, createdAt])
+  @@index([createdAt])
+  @@map("maps_usage_logs")
 }
 
 // ──────────────────────────────────────────────
@@ -1053,6 +1326,37 @@ model ControlTowerAlertItem {
 
   @@index([alertId])
   @@map("control_tower_alert_items")
+}
+
+// ──────────────────────────────────────────────
+// ERP SYNC ALERT
+// Alerta gerado pelo watcher quando o estado do pedido
+// no Citel diverge do snapshot capturado na criação.
+// ──────────────────────────────────────────────
+
+model ERPSyncAlert {
+  id                String   @id @default(cuid())
+  deliveryRequestId String
+  orderNumber       String
+  storeCode         String
+  // alertType: ORDER_CANCELLED | ORDER_ALREADY_INVOICED | ITEM_REMOVED
+  //            | ITEM_QUANTITY_CHANGED | DELIVERY_ADDRESS_CHANGED | CUSTOMER_CHANGED
+  alertType         String
+  // severity: CRITICAL | WARNING | INFO
+  severity          String
+  oldValue          String?  // JSON — valor antes da mudança
+  newValue          String?  // JSON — valor atual
+  isResolved        Boolean  @default(false)
+  resolvedAt        DateTime?
+  resolvedById      String?  // userId de quem resolveu
+  detectedAt        DateTime @default(now())
+
+  deliveryRequest DeliveryRequest @relation(fields: [deliveryRequestId], references: [id], onDelete: Cascade)
+
+  @@index([deliveryRequestId, isResolved])
+  @@index([orderNumber, isResolved])
+  @@index([isResolved, detectedAt])
+  @@map("erp_sync_alerts")
 }
 
 // ──────────────────────────────────────────────

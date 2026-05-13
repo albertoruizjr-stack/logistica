@@ -3,10 +3,11 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getSessionFromRequest } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/types";
-import { DeliveryType, DeliveryRequestStatus, TransferPriority } from "@prisma/client";
-import { fetchOrderFromERP, fetchStockForItems } from "@/services/erp.service";
-import { createTransfer } from "@/services/transferencia.service";
+import { DeliveryType, DeliveryRequestStatus, TransferPriority, TransferStatus } from "@prisma/client";
+import { enrichDeliveryRequestStock, calculateDeliveryVolumeRules } from "@/services/citel-stock.service";
+import { findAutoLinkCandidatesWithProbe } from "@/services/internal-transfer.service";
 import { createOrUpdateInitialAudit } from "@/services/audit.service";
+import { notifyTransferCreated } from "@/services/notifications.service";
 import { getDispatchWindow, isAfterFirstCutoff, isAfterSecondCutoff } from "@/lib/cutoff";
 import { recordSameDayException } from "@/services/audit.service";
 
@@ -34,6 +35,18 @@ const createSchema = z.object({
   // corte same-day 12h00 — entrega urgente após o horário limite
   sameDayRequested:       z.boolean().optional(),
   sameDayApprovalReason:  z.string().max(500).optional(),
+  // restrição geográfica SP — informado pelo frontend após geocoding
+  deliveryState:          z.string().length(2).optional(), // "SP", "RJ", etc.
+  outsideSPOverrideReason: z.string().max(500).optional(), // obrigatório quando fora de SP
+  // snapshots de endereço e status ERP — capturados pelo drawer no momento da consulta
+  customerAddressSnapshot:  z.string().optional(), // JSON: CitelEndereco do cliente
+  deliveryAddressSnapshot:  z.string().optional(), // JSON: CitelEndereco efetivo
+  deliveryAddressSource:    z.enum(["ORDER_DELIVERY_ADDRESS", "CUSTOMER_MAIN_ADDRESS", "MANUAL_OVERRIDE"]).optional(),
+  deliveryAddressOriginal:  z.string().optional(), // endereço antes de override manual
+  erpOrderStatus:           z.string().optional(), // status bruto Citel
+  erpOrderValidationStatus: z.string().optional(), // VALID | CANCELLED | ...
+  // CPF/CNPJ do cliente (da Citel)
+  customerDoc:              z.string().optional(),
 });
 
 export async function GET(req: NextRequest) {
@@ -97,6 +110,29 @@ export async function POST(req: NextRequest) {
     const data = parsed.data;
     orderKey = { orderNumber: data.orderNumber, orderStoreId: data.orderStoreId };
 
+    // Gate geográfico: endereço fora de SP exige permissão de ADMIN/OPERATOR + justificativa
+    if (data.deliveryState && data.deliveryState !== "SP") {
+      const canOverride = ["ADMIN", "OPERATOR", "STOCK_OPERATOR", "LOGISTICS_OPERATOR", "STORE_LEADER"].includes(session.role);
+      if (!canOverride) {
+        return NextResponse.json(
+          apiError(
+            `Endereço em ${data.deliveryState} está fora da área de entrega. Solicite ao operador para liberar manualmente.`,
+            "OUTSIDE_SP"
+          ),
+          { status: 422 }
+        );
+      }
+      if (!data.outsideSPOverrideReason) {
+        return NextResponse.json(
+          apiError(
+            "Informe a justificativa para entrega fora de SP.",
+            "OUTSIDE_SP_REASON_REQUIRED"
+          ),
+          { status: 422 }
+        );
+      }
+    }
+
     // Verifica duplicata antes de criar (evita erro 500 da constraint UNIQUE)
     const existing = await prisma.deliveryRequest.findFirst({
       where: { orderNumber: data.orderNumber, orderStoreId: data.orderStoreId },
@@ -109,37 +145,53 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Busca loja do pedido para obter o código (necessário para consulta ERP)
+    // Busca loja do pedido para obter código e codigoEmpresaCitel (necessário para Citel)
     const orderStore = await prisma.store.findUnique({
       where: { id: data.orderStoreId },
-      select: { code: true },
+      select: { code: true, codigoEmpresaCitel: true },
     });
 
     if (!orderStore) {
       return NextResponse.json(apiError("Loja do pedido não encontrada"), { status: 400 });
     }
 
-    // Lookup no ERP: opcional e não-bloqueante
-    // Se encontrar o PD, enriquece dados de itens para verificar estoque
-    const erpOrder = await fetchOrderFromERP(data.orderNumber, orderStore.code).catch(() => null);
+    // Consulta Citel: não-bloqueante — se indisponível, marca CITEL_DOWN e continua
+    const citelResult = orderStore.codigoEmpresaCitel
+      ? await enrichDeliveryRequestStock(
+          data.orderNumber,
+          orderStore.code,
+          orderStore.codigoEmpresaCitel
+        ).catch(() => null)
+      : null;
 
-    // Verifica disponibilidade de estoque só se o ERP retornou itens
-    const itemsWithAvailability = erpOrder?.items.length
-      ? (await fetchStockForItems(erpOrder.items)).map((r) => ({
-          productCode:     r.productCode,
-          productName:     r.productName,
-          quantity:        r.requestedQty,
-          unit:            "UN",
-          availableAtStore: r.stock?.availability.find((a) => a.storeCode === orderStore.code)?.available ?? false,
-          sourceStoreId:   undefined as string | undefined,
-        }))
-      : [];
+    const citelDown = citelResult === null;
+
+    // Monta itens para criação — usa dados reais da Citel quando disponíveis
+    const itemsWithAvailability = citelResult?.items.map((item) => ({
+      productCode:      item.productCode,
+      productName:      item.description ?? item.productCode,
+      quantity:         item.quantity,
+      unit:             item.unit,
+      description:      item.description,
+      brand:            item.brand,
+      barcode:          item.barcode,
+      grossWeight:      item.grossWeight,
+      totalWeight:      item.totalWeight,
+      hasMissingWeight: item.hasMissingWeight,
+      availableStock:   item.availableStock,
+      physicalStock:    item.physicalStock,
+      stockStatus:      item.stockStatus,
+      fetchedAt:        new Date(),
+      availableAtStore: item.availableAtStore,
+      sourceStoreId:    item.sourceStoreId ?? undefined,
+    })) ?? [];
 
     const allAvailable = itemsWithAvailability.length > 0 &&
       itemsWithAvailability.every((i) => i.availableAtStore);
 
-    const initialStatus: DeliveryRequestStatus = itemsWithAvailability.length === 0
-      ? DeliveryRequestStatus.PENDING           // sem itens do ERP: operador define depois
+    // Se Citel caiu, não bloqueamos criação — operador valida manualmente depois
+    const initialStatus: DeliveryRequestStatus = citelDown || itemsWithAvailability.length === 0
+      ? DeliveryRequestStatus.PENDING
       : allAvailable
         ? DeliveryRequestStatus.PENDING
         : DeliveryRequestStatus.AWAITING_TRANSFER;
@@ -181,7 +233,13 @@ export async function POST(req: NextRequest) {
         isComplete:       allAvailable,
         freightQuoteId:   data.freightQuoteId,
         chargedFreight:   data.chargedFreight,
-        totalValue:       erpOrder?.totalValue ?? null,
+        totalValue:       null,
+        // totais calculados pelo snapshot Citel
+        totalWeightKg:         citelResult?.totalWeightKg ?? null,
+        totalLatas:            citelResult?.totalLatas    ?? null,
+        hasMissingWeights:     citelResult?.hasMissingWeights ?? false,
+        stockValidationStatus: citelDown ? "CITEL_DOWN" : (citelResult?.stockValidationStatus ?? "PENDING"),
+        stockFetchedAt:        citelResult ? new Date() : null,
         notes:            data.notes,
         scheduledFor:     data.scheduledFor ? new Date(data.scheduledFor) : undefined,
         status:           initialStatus,
@@ -204,6 +262,12 @@ export async function POST(req: NextRequest) {
         sameDayRequestedAt: isSameDayRequest && afterSameDayCutoff && data.sameDayApprovalReason
           ? now
           : null,
+        // restrição geográfica SP
+        deliveryState:          data.deliveryState ?? null,
+        outsideSPApproved:      !!(data.deliveryState && data.deliveryState !== "SP" && data.outsideSPOverrideReason),
+        outsideSPApprovedBy:    data.deliveryState !== "SP" && data.outsideSPOverrideReason ? session.userId : null,
+        outsideSPApprovalReason: data.outsideSPOverrideReason ?? null,
+        outsideSPApprovedAt:    data.deliveryState !== "SP" && data.outsideSPOverrideReason ? now : null,
         items: itemsWithAvailability.length > 0
           ? {
               create: itemsWithAvailability.map((item) => ({
@@ -211,6 +275,16 @@ export async function POST(req: NextRequest) {
                 productName:      item.productName,
                 quantity:         item.quantity,
                 unit:             item.unit,
+                description:      item.description,
+                brand:            item.brand,
+                barcode:          item.barcode,
+                grossWeight:      item.grossWeight,
+                totalWeight:      item.totalWeight,
+                hasMissingWeight: item.hasMissingWeight,
+                availableStock:   item.availableStock,
+                physicalStock:    item.physicalStock,
+                stockStatus:      item.stockStatus,
+                fetchedAt:        item.fetchedAt,
                 availableAtStore: item.availableAtStore,
                 sourceStoreId:    item.sourceStoreId,
               })),
@@ -219,6 +293,30 @@ export async function POST(req: NextRequest) {
       },
       include: { items: true, store: true },
     });
+
+    // Salva snapshots de endereço e status ERP (campos adicionados em migrate-delivery-address-v1.mjs)
+    // Feito via raw SQL para não depender de prisma generate após a migration.
+    if (data.customerAddressSnapshot || data.erpOrderStatus) {
+      await prisma.$executeRawUnsafe(
+        `UPDATE delivery_requests SET
+          "customerAddressSnapshot"  = $1,
+          "deliveryAddressSnapshot"  = $2,
+          "deliveryAddressSource"    = $3,
+          "deliveryAddressOriginal"  = $4,
+          "erpOrderStatus"           = $5,
+          "erpOrderValidationStatus" = $6
+        WHERE id = $7`,
+        data.customerAddressSnapshot ?? null,
+        data.deliveryAddressSnapshot ?? null,
+        data.deliveryAddressSource ?? null,
+        data.deliveryAddressOriginal ?? null,
+        data.erpOrderStatus ?? null,
+        data.erpOrderValidationStatus ?? null,
+        deliveryRequest.id
+      ).catch(() => {
+        // Não-bloqueante: se a migration ainda não rodou, ignora silenciosamente
+      });
+    }
 
     // Registra exceção same-day para auditoria e alertas operacionais
     if (isSameDayRequest && afterSameDayCutoff && data.sameDayApprovalReason) {
@@ -230,24 +328,89 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Cria transferências automáticas para itens faltantes (só quando veio do ERP)
+    // Cria transferências automáticas para itens com estoque insuficiente na loja.
+    // NÃO-BLOQUEANTE: se a criação da transferência falhar (ex: validação de estoque,
+    // origem/destino iguais, etc.), a solicitação já foi salva com status AWAITING_TRANSFER
+    // e Jane pode criar a transferência manualmente. Logamos o erro e notificamos.
     const missingItems = itemsWithAvailability.filter((i) => !i.availableAtStore);
-    if (missingItems.length > 0) {
-      await createTransfer({
-        deliveryRequestId: deliveryRequest.id,
-        fromStoreId:       data.storeId,
-        toStoreId:         data.storeId,
-        priority:          data.deliveryType === DeliveryType.URGENT
+    if (missingItems.length > 0 && !citelDown) {
+      // Cria a Transfer direto via Prisma. Não usamos createTransfer() do service
+      // porque ele valida estoque na loja origem — e neste momento a origem real
+      // é DESCONHECIDA (vai ser uma das outras 4 lojas, descoberta quando o Jhow
+      // vincular o PD interno no Autcom). Por isso fromStore = toStore = loja
+      // do vendedor como placeholder; o link-pd corrige depois.
+      let transferId = "";
+      try {
+        const priority = data.deliveryType === DeliveryType.URGENT
           ? TransferPriority.URGENT
-          : TransferPriority.ANTICIPATED,
-        requestedById:     session.userId,
-        notes:             `Transferência automática para PD ${data.orderNumber}`,
-        items:             missingItems.map((i) => ({
-          productCode:  i.productCode,
-          productName:  i.productName,
-          quantity:     i.quantity,
-          unit:         i.unit,
-        })),
+          : TransferPriority.ANTICIPATED;
+        const t = await prisma.$transaction(async (tx) => {
+          const created = await tx.transfer.create({
+            data: {
+              deliveryRequestId: deliveryRequest.id,
+              fromStoreId:       data.storeId,
+              toStoreId:         data.storeId,
+              priority,
+              status:            TransferStatus.PENDING,
+              requestedById:     session.userId,
+              notes:             `Transferência automática para PD ${data.orderNumber}`,
+              items: {
+                create: missingItems.map((i) => ({
+                  productCode: i.productCode,
+                  productName: i.productName,
+                  quantity:    i.quantity,
+                  unit:        i.unit,
+                })),
+              },
+            },
+            include: { items: { select: { id: true, productCode: true, quantity: true } } },
+          });
+          await tx.transferHistory.create({
+            data: {
+              transferId:  created.id,
+              toStatus:    TransferStatus.PENDING,
+              changedById: session.userId,
+              notes:       "Transferência criada — aguardando vínculo com PD interno do Autcom",
+            },
+          });
+          return created;
+        });
+        transferId = t.id;
+
+        // Auto-vínculo: para cada item, busca PDs candidatos e vincula o mais recente
+        await Promise.all(t.items.map(async (ti) => {
+          try {
+            const cands = await findAutoLinkCandidatesWithProbe(ti.productCode, ti.quantity);
+            if (cands.length === 0) return;
+            const best = cands[0];
+            await prisma.transferItem.update({
+              where: { id: ti.id },
+              data: {
+                linkedCitelPD:        best.numeroDocumento,
+                linkedCitelStoreCode: best.codigoEmpresa,
+                linkedAt:             new Date(),
+                linkedById:           session.userId,
+              },
+            });
+          } catch (e) {
+            console.warn(`[POST solicitacoes] auto-link falhou pra ${ti.productCode}:`, e instanceof Error ? e.message : e);
+          }
+        }));
+      } catch (err) {
+        console.warn(
+          `[POST /api/solicitacoes] falha ao criar Transfer placeholder para PD ${data.orderNumber}: ` +
+          (err instanceof Error ? err.message : String(err)),
+        );
+      }
+
+      // Notifica Jhow + Jane (gatilho #1) — independente de a Transfer ter sido criada
+      void notifyTransferCreated({
+        transferId,
+        deliveryRequestId: deliveryRequest.id,
+        orderNumber:       data.orderNumber,
+        storeCode:         orderStore.code,
+        itemCount:         missingItems.length,
+        fromStoreCode:     orderStore.code,
       });
     }
 
@@ -267,7 +430,7 @@ export async function POST(req: NextRequest) {
         distanceKm:        quote?.distanceKm ?? undefined,
         durationMinutes:   quote?.durationMinutes ?? undefined,
         isApproximate:     quote?.isApproximate ?? undefined,
-        totalValue:        erpOrder?.totalValue ?? undefined,
+        totalValue:        undefined,
       });
     }
 

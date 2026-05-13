@@ -179,52 +179,82 @@ describe("scoreDriverForDelivery", () => {
   });
 });
 
-const mockDriver = { id: "d1", name: "João", score: 80 };
+const CTX_DEFAULT = {
+  driverEtaMin:         0,
+  isSameDayAfterCutoff: false,
+  dispatchWindow:       "FIRST_DISPATCH" as const,
+};
+const CTX_URGENT_AFTER_CUTOFF = {
+  driverEtaMin:         0,
+  isSameDayAfterCutoff: true,
+  dispatchWindow:       "EXPRESS" as const,
+};
+
+const mockDriver = { id: "d1", name: "João", score: 80, minutesUntilFree: 0 };
+const mockDriverBusy = { id: "d1", name: "João", score: 80, minutesUntilFree: 30 };
 
 describe("decideBestDeliveryOption", () => {
-  // Regra 1: Urgente + Lalamove mais barato → Lalamove
-  it("regra 1: urgente com Lalamove barato → LALAMOVE", () => {
+  // Regra 0: same-day após corte → EXPRESS Lalamove obrigatório
+  it("regra 0: same-day após 12h + Lalamove disponível → LALAMOVE express", () => {
     const r = decideBestDeliveryOption({
       internalVehicle: InternalVehicleType.FIORINO,
       lalamoveVehicle: LalamoveServiceType.UTILITARIO,
       bestDriver: mockDriver,
       internalCost: 50,
-      lalamoveCost: 40,  // < 50 × 1.2 = 60
+      lalamoveCost: 80,
       isUrgent: true,
+      ctx: CTX_URGENT_AFTER_CUTOFF,
+    });
+    expect(r.mode).toBe("LALAMOVE");
+    expect(r.reason).toContain("Same-day");
+  });
+
+  // Regra 1: Urgente + motorista ocupado → Lalamove
+  it("regra 1: urgente com motorista ocupado > 20 min → LALAMOVE", () => {
+    const r = decideBestDeliveryOption({
+      internalVehicle: InternalVehicleType.FIORINO,
+      lalamoveVehicle: LalamoveServiceType.UTILITARIO,
+      bestDriver: mockDriverBusy,
+      internalCost: 50,
+      lalamoveCost: 40,
+      isUrgent: true,
+      ctx: CTX_DEFAULT,
     });
     expect(r.mode).toBe("LALAMOVE");
     expect(r.requiresManualAssignment).toBe(false);
   });
 
-  // Regra 2: Motorista bom + custo interno ≤ Lalamove → INTERNAL
-  it("regra 2: motorista score >= 60 e mais barato → INTERNAL", () => {
+  // Regra 2: Motorista livre, score >= 60, custo interno ≤ Lalamove → INTERNAL
+  it("regra 2: motorista livre com score >= 60 e mais barato → INTERNAL", () => {
     const r = decideBestDeliveryOption({
       internalVehicle: InternalVehicleType.FIORINO,
       lalamoveVehicle: LalamoveServiceType.UTILITARIO,
-      bestDriver: mockDriver,  // score 80
+      bestDriver: mockDriver,
       internalCost: 35,
       lalamoveCost: 40,
       isUrgent: false,
+      ctx: CTX_DEFAULT,
     });
     expect(r.mode).toBe("INTERNAL");
     expect(r.driverId).toBe("d1");
   });
 
-  // Regra 3: Lalamove mais barato → LALAMOVE
-  it("regra 3: Lalamove mais barato que interno → LALAMOVE", () => {
+  // Regra 2: Lalamove claramente mais barato (>10% economia) → LALAMOVE
+  it("regra 2: Lalamove >10% mais barato → LALAMOVE", () => {
     const r = decideBestDeliveryOption({
       internalVehicle: InternalVehicleType.FIORINO,
       lalamoveVehicle: LalamoveServiceType.UTILITARIO,
-      bestDriver: { id: "d1", name: "João", score: 70 },
+      bestDriver: { id: "d1", name: "João", score: 70, minutesUntilFree: 0 },
       internalCost: 60,
-      lalamoveCost: 30,
+      lalamoveCost: 30,  // 50% mais barato
       isUrgent: false,
+      ctx: CTX_DEFAULT,
     });
     expect(r.mode).toBe("LALAMOVE");
   });
 
-  // Regra 4: Sem motorista disponível → LALAMOVE
-  it("regra 4: nenhum motorista disponível → LALAMOVE", () => {
+  // Regra 4: Sem motorista com score suficiente → LALAMOVE
+  it("regra 4: nenhum motorista com score suficiente → LALAMOVE", () => {
     const r = decideBestDeliveryOption({
       internalVehicle: InternalVehicleType.FIORINO,
       lalamoveVehicle: LalamoveServiceType.UTILITARIO,
@@ -232,6 +262,7 @@ describe("decideBestDeliveryOption", () => {
       internalCost: 35,
       lalamoveCost: 40,
       isUrgent: false,
+      ctx: CTX_DEFAULT,
     });
     expect(r.mode).toBe("LALAMOVE");
   });
@@ -245,6 +276,7 @@ describe("decideBestDeliveryOption", () => {
       internalCost: 35,
       lalamoveCost: null,
       isUrgent: false,
+      ctx: CTX_DEFAULT,
     });
     expect(r.mode).toBe("INTERNAL");
     expect(r.requiresManualAssignment).toBe(false);
@@ -259,9 +291,25 @@ describe("decideBestDeliveryOption", () => {
       internalCost: 35,
       lalamoveCost: null,
       isUrgent: false,
+      ctx: CTX_DEFAULT,
     });
     expect(r.mode).toBe("INTERNAL");
     expect(r.requiresManualAssignment).toBe(true);
+  });
+
+  // Consolidation note: D+1 com frota própria deve incluir sugestão
+  it("D+1 com motorista bom inclui consolidationNote", () => {
+    const r = decideBestDeliveryOption({
+      internalVehicle: InternalVehicleType.FIORINO,
+      lalamoveVehicle: LalamoveServiceType.UTILITARIO,
+      bestDriver: mockDriver,
+      internalCost: 35,
+      lalamoveCost: 36,   // custo similar — interno vence
+      isUrgent: false,
+      ctx: { ...CTX_DEFAULT, dispatchWindow: "FIRST_DISPATCH" },
+    });
+    expect(r.mode).toBe("INTERNAL");
+    expect(r.consolidationNote).toBeDefined();
   });
 });
 
@@ -376,7 +424,8 @@ describe("makeFreightDecision (integração com mocks)", () => {
     ]);
 
     vi.mocked(resolveRoute).mockResolvedValue({
-      distanceKm: 8, durationMin: 20, isApproximate: false,
+      distanceKm: 8, durationMin: 20, durationInTrafficMin: 25,
+      isApproximate: false, isTrafficFresh: true,
     });
 
     vi.mocked(prisma.driver.findMany).mockResolvedValue([

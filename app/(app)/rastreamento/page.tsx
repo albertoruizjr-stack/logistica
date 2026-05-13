@@ -12,7 +12,7 @@ export default async function RastreamentoPage() {
   const session = await getSession();
   if (!session) redirect("/login");
 
-  if (!["ADMIN", "OPERATOR"].includes(session.role)) {
+  if (!["ADMIN", "OPERATOR", "STOCK_OPERATOR", "LOGISTICS_OPERATOR", "STORE_LEADER"].includes(session.role)) {
     redirect("/dashboard");
   }
 

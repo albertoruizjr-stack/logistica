@@ -11,6 +11,8 @@
 
 import { DeliveryRequestStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { validateClaimOwnership, ClaimError, type ClaimInfo } from "./claim.service";
+import { DeliveryType, DispatchWindow, SLAType } from "@prisma/client";
 
 const S = DeliveryRequestStatus;
 
@@ -38,7 +40,9 @@ export const ALLOWED_TRANSITIONS: Record<DeliveryRequestStatus, DeliveryRequestS
   [S.AWAITING_TRANSFER]:   [S.SEPARADO, S.AWAITING_ITEMS, S.CANCELLED, S.OCORRENCIA],
   // Fase fiscal
   [S.SEPARADO]:            [S.AGUARDANDO_NF, S.CANCELLED, S.OCORRENCIA],
-  [S.AGUARDANDO_NF]:       [S.NF_EMITIDA, S.CANCELLED, S.OCORRENCIA],
+  // Etapa NF unificada: "NF emitida no Citel" leva direto pra NF_VINCULADA.
+  [S.AGUARDANDO_NF]:       [S.NF_VINCULADA, S.NF_EMITIDA, S.CANCELLED, S.OCORRENCIA],
+  // NF_EMITIDA mantida só pra registros antigos — pode evoluir para NF_VINCULADA.
   [S.NF_EMITIDA]:          [S.NF_VINCULADA, S.AGUARDANDO_NF, S.CANCELLED, S.OCORRENCIA],
   [S.NF_VINCULADA]:        [S.PRONTO_ROTEIRIZACAO, S.CANCELLED, S.OCORRENCIA],
   // Fase logística
@@ -69,6 +73,12 @@ export interface TransitionMetadata {
   separatedBy?: string;         // userId — obrigatório
   // ROTEIRIZADO
   routeId?: string;             // obrigatório
+  waveId?: string;              // opcional — wave que originou a rota
+  // DISPATCHED (rota)
+  dispatchedByRoute?: boolean;  // marca que o dispatch veio de uma Route inteira
+  // SEPARADO com divergências (auto via transfer)
+  hasDivergences?: boolean;
+  totalDivergences?: number;
   // DELIVERED
   deliveredAt?: string;         // ISO date — opcional (usa now() se ausente)
   // OCORRENCIA
@@ -99,6 +109,9 @@ export class StateMachineError extends Error {
       | "GATE_FAILED"
       | "PERMISSION_DENIED"
       | "NOT_FOUND"
+      | "CLAIM_VIOLATION",
+    // Preenchido apenas em CLAIM_VIOLATION — contém info do operador que tem o lock
+    public readonly claimInfo?: ClaimInfo
   ) {
     super(message);
     this.name = "StateMachineError";
@@ -170,10 +183,15 @@ type DbClient = Prisma.TransactionClient | typeof prisma;
 
 interface GateRequest {
   id: string;
+  storeId: string;
   deliveryAddress: string | null;
   deliveryLat: number | null;
   deliveryLng: number | null;
   invoiceNumber: string | null;
+  slaType: SLAType;
+  deliveryType: DeliveryType;
+  dispatchWindow: DispatchWindow | null;
+  createdAt: Date;
 }
 
 export async function validateOperationalGates(
@@ -221,12 +239,7 @@ export async function validateOperationalGates(
           "GATE_FAILED"
         );
       }
-      if (!request.deliveryLat || !request.deliveryLng) {
-        throw new StateMachineError(
-          "Coordenadas de entrega ausentes. Execute a geocodificação do endereço antes de avançar.",
-          "GATE_FAILED"
-        );
-      }
+      // Coordenadas (lat/lng) NÃO são exigidas — o Spoke geocodifica internamente.
       break;
     }
 
@@ -319,6 +332,97 @@ function buildStatusUpdateData(
 }
 
 // ──────────────────────────────────────────────
+// SNAPSHOT DE MÉTRICAS OPERACIONAIS
+// Fecha o snapshot do status anterior e abre novo.
+// Best-effort: erros não bloqueiam a transição.
+// ──────────────────────────────────────────────
+
+async function _recordSnapshot(
+  tx: DbClient,
+  requestId: string,
+  fromStatus: DeliveryRequestStatus,
+  toStatus: DeliveryRequestStatus,
+  request: GateRequest,
+  actorId: string,
+): Promise<void> {
+  const now = new Date();
+
+  try {
+    // Lookup operator name (only for human actors)
+    let operatorName: string | null = null;
+    if (actorId !== "SYSTEM") {
+      const user = await tx.user.findUnique({
+        where: { id: actorId },
+        select: { name: true },
+      });
+      operatorName = user?.name ?? null;
+    }
+
+    // Find the open snapshot for this request
+    let openSnapshot = await tx.operationalMetricsSnapshot.findFirst({
+      where: { deliveryRequestId: requestId, exitedAt: null },
+      select: { id: true, enteredAt: true },
+      orderBy: { enteredAt: "desc" },
+    });
+
+    // If no open snapshot exists and this is the first transition,
+    // create a retroactive one for the initial PENDING state
+    if (!openSnapshot) {
+      const count = await tx.operationalMetricsSnapshot.count({
+        where: { deliveryRequestId: requestId },
+      });
+      if (count === 0) {
+        const retroactive = await tx.operationalMetricsSnapshot.create({
+          data: {
+            deliveryRequestId: requestId,
+            status:            fromStatus,
+            enteredAt:         request.createdAt,
+            storeId:           request.storeId,
+            slaType:           request.slaType,
+            deliveryType:      request.deliveryType,
+            dispatchWindow:    request.dispatchWindow,
+          },
+          select: { id: true, enteredAt: true },
+        });
+        openSnapshot = retroactive;
+      }
+    }
+
+    // Close the previous snapshot
+    if (openSnapshot) {
+      const durationSeconds = Math.max(
+        0,
+        Math.floor((now.getTime() - openSnapshot.enteredAt.getTime()) / 1000)
+      );
+      await tx.operationalMetricsSnapshot.update({
+        where: { id: openSnapshot.id },
+        data: { exitedAt: now, durationSeconds },
+      });
+    }
+
+    // Don't open a new snapshot for terminal states
+    if (toStatus === S.DELIVERED || toStatus === S.CANCELLED) return;
+
+    await tx.operationalMetricsSnapshot.create({
+      data: {
+        deliveryRequestId: requestId,
+        status:            toStatus,
+        enteredAt:         now,
+        operatorId:        actorId !== "SYSTEM" ? actorId : null,
+        operatorName,
+        storeId:           request.storeId,
+        slaType:           request.slaType,
+        deliveryType:      request.deliveryType,
+        dispatchWindow:    request.dispatchWindow,
+      },
+    });
+  } catch (err) {
+    // Snapshot failure never blocks the operational transition
+    console.error("[snapshot] Falha ao registrar snapshot:", err);
+  }
+}
+
+// ──────────────────────────────────────────────
 // NÚCLEO DA TRANSIÇÃO (uso interno)
 // Executa dentro de uma tx existente — nunca cria transaction.
 // ──────────────────────────────────────────────
@@ -333,16 +437,39 @@ async function _applyTransition(
   // Valida estruturalmente
   validateTransition(fromStatus, ctx.toStatus, ctx.actorRole, ctx.metadata);
 
+  // Valida ownership do claim (atores do sistema são isentos)
+  if (ctx.actorId !== "SYSTEM") {
+    try {
+      await validateClaimOwnership(tx, requestId, ctx.actorId);
+    } catch (err) {
+      if (err instanceof ClaimError && err.code === "CLAIMED_BY_OTHER") {
+        throw new StateMachineError(err.message, "CLAIM_VIOLATION", err.claim);
+      }
+      throw err;
+    }
+  }
+
   // Valida gates operacionais
   await validateOperationalGates(tx, request, ctx.toStatus, ctx.metadata);
 
   // Dados extras por status
   const extraData = buildStatusUpdateData(ctx.toStatus, ctx.metadata);
 
-  // Atualiza status + campos extras
+  // Atualiza status + campos extras + libera o claim do ator após transição bem-sucedida
   const updated = await tx.deliveryRequest.update({
     where: { id: requestId },
-    data: { status: ctx.toStatus, ...extraData },
+    data: {
+      status: ctx.toStatus,
+      ...extraData,
+      // Libera o claim se o ator é o dono (ou se não há claim)
+      ...(ctx.actorId !== "SYSTEM" ? {
+        lockedBy:      null,
+        lockedByName:  null,
+        lockedAt:      null,
+        lockExpiresAt: null,
+        lockReason:    null,
+      } : {}),
+    },
     select: { id: true, status: true },
   });
 
@@ -360,6 +487,9 @@ async function _applyTransition(
     },
   });
 
+  // Registra snapshot de métricas operacionais (best-effort)
+  await _recordSnapshot(tx, requestId, fromStatus, ctx.toStatus, request, ctx.actorId);
+
   return updated;
 }
 
@@ -376,11 +506,16 @@ export async function transitionDeliveryRequest(
       where: { id: ctx.requestId },
       select: {
         id: true,
+        storeId: true,
         status: true,
         deliveryAddress: true,
         deliveryLat: true,
         deliveryLng: true,
         invoiceNumber: true,
+        slaType: true,
+        deliveryType: true,
+        dispatchWindow: true,
+        createdAt: true,
       },
     });
 
@@ -408,11 +543,16 @@ export async function transitionDeliveryRequestWithTx(
     where: { id: requestId },
     select: {
       id: true,
+      storeId: true,
       status: true,
       deliveryAddress: true,
       deliveryLat: true,
       deliveryLng: true,
       invoiceNumber: true,
+      slaType: true,
+      deliveryType: true,
+      dispatchWindow: true,
+      createdAt: true,
     },
   });
 
@@ -437,6 +577,7 @@ export function stateMachineErrorToHttp(err: StateMachineError): {
     case "PERMISSION_DENIED": return { status: 403, code: err.code, message: err.message };
     case "GATE_FAILED":       return { status: 422, code: err.code, message: err.message };
     case "INVALID_TRANSITION":return { status: 422, code: err.code, message: err.message };
+    case "CLAIM_VIOLATION":   return { status: 409, code: err.code, message: err.message };
     default:                  return { status: 500, code: "INTERNAL_ERROR", message: err.message };
   }
 }

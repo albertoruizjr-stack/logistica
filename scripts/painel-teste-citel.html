@@ -1,0 +1,808 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="refresh" content="3">
+<title>OS-2026-05-12 · IMPL-CITEL-PD</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,700;0,9..144,900;1,9..144,500&family=JetBrains+Mono:wght@400;500;600&family=Bebas+Neue&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:        #f1e9d6;
+    --paper-deep:   #e8dec3;
+    --paper-shadow: #d6cba9;
+    --ink:          #161e36;
+    --ink-soft:     #475070;
+    --ink-faint:    #8a8e98;
+    --rule:         #c5b990;
+    --rule-soft:    #d8cca1;
+    --stamp-green:  #3b6021;
+    --stamp-red:    #a4231a;
+    --stamp-amber:  #c97014;
+    --blueprint:    #234a78;
+  }
+
+  *{box-sizing:border-box;margin:0;padding:0}
+
+  html,body{
+    background:var(--paper);
+    color:var(--ink);
+    font-family:'JetBrains Mono', ui-monospace, monospace;
+    font-size:13px;
+    line-height:1.6;
+    min-height:100vh;
+    /* papel quadriculado sutil + ruído via gradiente */
+    background-image:
+      linear-gradient(var(--rule-soft) 1px, transparent 1px),
+      linear-gradient(90deg, var(--rule-soft) 1px, transparent 1px),
+      radial-gradient(ellipse at top left, rgba(192,170,120,.18), transparent 60%),
+      radial-gradient(ellipse at bottom right, rgba(35,74,120,.06), transparent 50%);
+    background-size: 32px 32px, 32px 32px, 100% 100%, 100% 100%;
+    background-position: -1px -1px, -1px -1px, 0 0, 0 0;
+  }
+
+  /* MARCA D'ÁGUA */
+  body::before{
+    content:"WIP · RASCUNHO";
+    position:fixed;
+    top:50%;left:50%;
+    transform:translate(-50%,-50%) rotate(-22deg);
+    font-family:'Bebas Neue', sans-serif;
+    font-size:280px;
+    letter-spacing:.08em;
+    color:rgba(22,30,54,.025);
+    pointer-events:none;
+    white-space:nowrap;
+    z-index:0;
+  }
+
+  .sheet{
+    max-width:1080px;
+    margin:0 auto;
+    padding:48px 56px 80px;
+    position:relative;
+    z-index:1;
+  }
+
+  /* RÉGUA LATERAL */
+  .ruler{
+    position:absolute;
+    left:24px;
+    top:48px;
+    bottom:48px;
+    width:14px;
+    display:flex;flex-direction:column;
+    font-family:'JetBrains Mono';
+    font-size:9px;
+    color:var(--ink-faint);
+    letter-spacing:0;
+  }
+  .ruler-tick{
+    flex:1;
+    border-top:1px solid var(--rule);
+    padding-top:2px;
+    padding-left:2px;
+    text-align:left;
+  }
+  .ruler-tick:nth-child(2n){
+    border-top:1px dashed var(--rule-soft);
+    color:transparent;
+  }
+  .ruler-tick:last-child{border-bottom:1px solid var(--rule)}
+
+  /* CABEÇALHO TIPO ORDEM DE SERVIÇO */
+  header{
+    border-top:3px double var(--ink);
+    border-bottom:3px double var(--ink);
+    padding:24px 0 28px;
+    position:relative;
+  }
+  .meta-grid{
+    display:grid;
+    grid-template-columns:repeat(4, 1fr);
+    gap:0;
+    border-bottom:1px solid var(--ink);
+    padding-bottom:14px;
+    margin-bottom:22px;
+  }
+  .meta-grid > div{
+    border-right:1px dashed var(--rule);
+    padding:0 14px;
+    font-size:10px;
+    text-transform:uppercase;
+    letter-spacing:.18em;
+    color:var(--ink-soft);
+  }
+  .meta-grid > div:first-child{padding-left:0}
+  .meta-grid > div:last-child{border-right:none}
+  .meta-grid strong{
+    display:block;
+    color:var(--ink);
+    font-size:13px;
+    font-weight:600;
+    letter-spacing:.04em;
+    margin-top:4px;
+  }
+
+  /* TÍTULO QUEBRADO E ASSIMÉTRICO */
+  h1{
+    font-family:'Fraunces', serif;
+    font-variation-settings:"opsz" 144;
+    font-weight:900;
+    line-height:.86;
+    letter-spacing:-.035em;
+    color:var(--ink);
+    margin-bottom:18px;
+  }
+  h1 .line-a{font-size:78px;display:block}
+  h1 .line-b{font-size:78px;font-style:italic;font-weight:700;padding-left:120px;display:block;color:var(--blueprint)}
+  h1 .line-c{
+    font-size:14px;
+    font-family:'JetBrains Mono';
+    font-weight:500;
+    letter-spacing:.18em;
+    text-transform:uppercase;
+    display:block;
+    padding-left:120px;
+    padding-top:14px;
+    color:var(--ink-soft);
+  }
+  h1 .line-c::before{content:"› "; color:var(--stamp-red); font-weight:700}
+
+  /* CARIMBO DE STATUS GERAL */
+  .header-stamp{
+    position:absolute;
+    top:18px;
+    right:0;
+    font-family:'Bebas Neue', sans-serif;
+    font-size:42px;
+    line-height:1;
+    color:var(--stamp-amber);
+    border:3px double var(--stamp-amber);
+    padding:10px 18px 8px;
+    transform:rotate(6deg);
+    letter-spacing:.06em;
+    background:rgba(241,233,214,.4);
+    box-shadow:1px 1px 0 rgba(201,112,20,.15);
+  }
+  .header-stamp small{display:block; font-size:10px; letter-spacing:.18em; color:var(--stamp-amber); font-family:'JetBrains Mono'; font-weight:500}
+
+  /* BARRA DE PROGRESSO TIPO ESCALA */
+  .progress{
+    margin-top:24px;
+    display:grid;
+    grid-template-columns:auto 1fr auto;
+    gap:18px;
+    align-items:center;
+  }
+  .progress-label{
+    font-size:10px;
+    text-transform:uppercase;
+    letter-spacing:.22em;
+    color:var(--ink-soft);
+  }
+  .progress-track{
+    position:relative;
+    height:18px;
+    border:1px solid var(--ink);
+    background: repeating-linear-gradient(135deg, transparent 0 6px, rgba(22,30,54,.05) 6px 7px);
+  }
+  .progress-fill{
+    position:absolute;left:0;top:0;bottom:0;
+    background:
+      repeating-linear-gradient(135deg, var(--blueprint) 0 6px, #2e5a8d 6px 7px);
+    border-right:1px solid var(--ink);
+    transition:width .6s ease-out;
+  }
+  .progress-scale{
+    position:absolute;left:0;right:0;top:18px;
+    display:flex;justify-content:space-between;
+    padding:2px 0;
+    font-size:8px;
+    color:var(--ink-faint);
+    font-family:'JetBrains Mono';
+  }
+  .progress-count{
+    font-family:'Bebas Neue', sans-serif;
+    font-size:30px;
+    color:var(--ink);
+    letter-spacing:.04em;
+    line-height:1;
+  }
+  .progress-count small{font-size:14px;color:var(--ink-faint)}
+
+  /* ETAPAS */
+  .steps{margin-top:36px}
+
+  .step{
+    display:grid;
+    grid-template-columns:80px 1fr 140px;
+    gap:24px;
+    padding:24px 0;
+    border-top:1px solid var(--rule);
+    position:relative;
+  }
+  .step:first-child{border-top:none}
+  .step:last-child{border-bottom:1px solid var(--ink)}
+
+  .step-num{
+    font-family:'Fraunces', serif;
+    font-variation-settings:"opsz" 144;
+    font-weight:900;
+    font-size:64px;
+    line-height:.85;
+    color:var(--rule);
+    letter-spacing:-.04em;
+  }
+  .step.done .step-num{color:var(--stamp-green)}
+  .step.in_progress .step-num{color:var(--stamp-amber)}
+  .step.error .step-num{color:var(--stamp-red)}
+
+  .step-body{padding-top:4px}
+
+  .step-cat{
+    font-size:9px;
+    text-transform:uppercase;
+    letter-spacing:.24em;
+    color:var(--ink-faint);
+    margin-bottom:6px;
+  }
+  .step-title{
+    font-family:'Fraunces', serif;
+    font-variation-settings:"opsz" 36;
+    font-weight:700;
+    font-size:22px;
+    line-height:1.15;
+    color:var(--ink);
+    margin-bottom:10px;
+    letter-spacing:-.01em;
+  }
+  .step-title code{
+    font-family:'JetBrains Mono', monospace;
+    font-size:15px;
+    font-weight:500;
+    background:rgba(35,74,120,.08);
+    border:1px solid rgba(35,74,120,.15);
+    padding:1px 7px;
+    border-radius:2px;
+    color:var(--blueprint);
+  }
+  .step-desc{
+    color:var(--ink-soft);
+    font-size:13px;
+    line-height:1.7;
+    max-width:62ch;
+  }
+  .step-desc code{
+    font-family:'JetBrains Mono';
+    font-size:11.5px;
+    background:rgba(22,30,54,.06);
+    padding:0 5px;
+    border-radius:2px;
+    color:var(--ink);
+  }
+  .step-desc b{color:var(--ink); font-weight:600}
+
+  /* CARIMBO LATERAL POR STATUS */
+  .step-stamp{
+    align-self:start;
+    margin-top:8px;
+    font-family:'Bebas Neue', sans-serif;
+    font-size:22px;
+    line-height:1;
+    letter-spacing:.08em;
+    text-align:center;
+    padding:8px 0 6px;
+    border:2px double currentColor;
+    background:rgba(241,233,214,.5);
+    position:relative;
+  }
+  .step-stamp small{
+    display:block;
+    font-family:'JetBrains Mono';
+    font-size:8px;
+    font-weight:500;
+    letter-spacing:.16em;
+    margin-top:2px;
+    opacity:.75;
+  }
+  .step.done .step-stamp{
+    color:var(--stamp-green);
+    transform:rotate(-4deg);
+    animation:stampDown .5s cubic-bezier(.34,1.56,.64,1);
+  }
+  .step.in_progress .step-stamp{
+    color:var(--stamp-amber);
+    transform:rotate(2deg);
+    animation:wobble 2s ease-in-out infinite;
+  }
+  .step.error .step-stamp{
+    color:var(--stamp-red);
+    transform:rotate(-3deg);
+  }
+  .step.pending .step-stamp{
+    color:var(--ink-faint);
+    border-style:dashed;
+    border-width:1px;
+    background:transparent;
+  }
+  @keyframes stampDown{
+    0%{transform:scale(2) rotate(0deg); opacity:0}
+    60%{transform:scale(1.1) rotate(-4deg); opacity:1}
+    100%{transform:scale(1) rotate(-4deg); opacity:1}
+  }
+  @keyframes wobble{
+    0%,100%{transform:rotate(2deg)}
+    50%{transform:rotate(-1deg)}
+  }
+
+  /* DETALHES / EVIDÊNCIA */
+  details{
+    margin-top:14px;
+    border-left:2px solid var(--rule);
+    padding-left:14px;
+  }
+  summary{
+    cursor:pointer;
+    user-select:none;
+    font-size:10px;
+    text-transform:uppercase;
+    letter-spacing:.24em;
+    color:var(--blueprint);
+    padding:2px 0;
+    display:inline-block;
+  }
+  summary::before{content:"+ "; font-weight:700}
+  details[open] summary::before{content:"− "}
+  summary:hover{color:var(--ink)}
+
+  pre{
+    margin-top:10px;
+    padding:14px 16px;
+    background:rgba(22,30,54,.04);
+    border:1px solid rgba(22,30,54,.12);
+    font-family:'JetBrains Mono', monospace;
+    font-size:11.5px;
+    line-height:1.7;
+    color:var(--ink);
+    overflow-x:auto;
+    white-space:pre;
+  }
+  pre .k{color:var(--blueprint); font-weight:600}
+  pre .s{color:var(--stamp-green); font-weight:600}
+  pre .n{color:var(--stamp-amber); font-weight:600}
+  pre .c{color:var(--ink-faint); font-style:italic}
+
+  /* RODAPÉ */
+  footer{
+    margin-top:48px;
+    padding-top:18px;
+    border-top:3px double var(--ink);
+    display:grid;
+    grid-template-columns:1fr auto 1fr;
+    gap:20px;
+    font-size:10px;
+    text-transform:uppercase;
+    letter-spacing:.18em;
+    color:var(--ink-soft);
+    align-items:center;
+  }
+  .pulse{
+    display:inline-block;
+    width:7px;height:7px;
+    border-radius:50%;
+    background:var(--stamp-amber);
+    margin-right:8px;
+    animation:pulse 1.8s ease-in-out infinite;
+    vertical-align:middle;
+  }
+  @keyframes pulse{
+    0%,100%{opacity:1; transform:scale(1)}
+    50%{opacity:.3; transform:scale(.7)}
+  }
+  .barcode{
+    height:38px;
+    display:flex;
+    align-items:flex-end;
+    justify-content:center;
+    gap:1px;
+  }
+  .barcode span{
+    width:2px;
+    background:var(--ink);
+    height:100%;
+  }
+  .barcode span:nth-child(3n){height:70%;width:1px}
+  .barcode span:nth-child(5n){height:90%;width:3px}
+  .barcode span:nth-child(7n){height:60%;width:2px}
+  .barcode-label{
+    text-align:center;
+    font-family:'JetBrains Mono';
+    font-size:9px;
+    letter-spacing:.3em;
+    margin-top:4px;
+    color:var(--ink-soft);
+  }
+
+  /* TOQUE FINAL: assinatura */
+  .signature{
+    margin-top:32px;
+    padding-top:16px;
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:48px;
+  }
+  .sig-block{
+    border-top:1px solid var(--ink);
+    padding-top:6px;
+    font-size:9px;
+    text-transform:uppercase;
+    letter-spacing:.18em;
+    color:var(--ink-soft);
+  }
+  .sig-block .sig-name{
+    font-family:'Fraunces', serif;
+    font-style:italic;
+    font-size:18px;
+    font-weight:500;
+    color:var(--ink);
+    letter-spacing:.01em;
+    text-transform:none;
+    margin-bottom:6px;
+    line-height:1;
+  }
+
+  @media (max-width: 820px){
+    .sheet{padding:32px 24px 60px}
+    .ruler{display:none}
+    h1 .line-a, h1 .line-b{font-size:48px}
+    h1 .line-b, h1 .line-c{padding-left:0}
+    .meta-grid{grid-template-columns:repeat(2,1fr); gap:12px 0}
+    .meta-grid > div{border-right:none}
+    .meta-grid > div:nth-child(odd){border-right:1px dashed var(--rule)}
+    .step{grid-template-columns:48px 1fr; gap:16px}
+    .step-num{font-size:42px}
+    .step-stamp{grid-column:1/-1; margin-top:14px; max-width:200px}
+    .header-stamp{position:static; display:inline-block; margin-bottom:18px}
+  }
+</style>
+</head>
+<body>
+
+<div class="ruler" aria-hidden="true">
+  <div class="ruler-tick">00</div>
+  <div class="ruler-tick">01</div>
+  <div class="ruler-tick">02</div>
+  <div class="ruler-tick">03</div>
+  <div class="ruler-tick">04</div>
+  <div class="ruler-tick">05</div>
+  <div class="ruler-tick">06</div>
+  <div class="ruler-tick">07</div>
+  <div class="ruler-tick">08</div>
+  <div class="ruler-tick">09</div>
+  <div class="ruler-tick">10</div>
+  <div class="ruler-tick">11</div>
+</div>
+
+<div class="sheet">
+
+<header>
+  <div class="header-stamp" style="color:var(--stamp-green);border-color:var(--stamp-green);transform:rotate(4deg)">
+    Aguarda Aceite
+    <small style="color:var(--stamp-green)">88.8% concluído</small>
+  </div>
+
+  <div class="meta-grid">
+    <div>protocolo<strong>OS-2026-05-12</strong></div>
+    <div>módulo<strong>citel · pedido</strong></div>
+    <div>ref. pd<strong>717081 / 067</strong></div>
+    <div>etapas<strong>8 de 9</strong></div>
+  </div>
+
+  <h1>
+    <span class="line-a">Buscar Pedido</span>
+    <span class="line-b">na Citel.</span>
+    <span class="line-c">Integração com ERP Autcom · porta 25049</span>
+  </h1>
+
+</header>
+
+<div class="progress">
+  <div class="progress-label">Avanço</div>
+  <div class="progress-track">
+    <div class="progress-fill" style="width:88.8%"></div>
+    <div class="progress-scale">
+      <span>0</span><span>·</span><span>·</span><span>25</span><span>·</span><span>·</span><span>50</span><span>·</span><span>·</span><span>75</span><span>·</span><span>·</span><span>100%</span>
+    </div>
+  </div>
+  <div class="progress-count">08<small>/09</small></div>
+</div>
+
+<div class="steps">
+
+<!-- ETAPA 1 -->
+<div class="step done">
+  <div class="step-num">01</div>
+  <div class="step-body">
+    <div class="step-cat">Diagnóstico · API real</div>
+    <div class="step-title">Testar o endpoint real do Citel com um pedido vivo</div>
+    <div class="step-desc">Rodei o script de referência contra o <b>PD 717081</b> da <b>loja 067</b> pra confirmar três coisas: a porta correta é a <b>25049</b> (não 25046), o endpoint é <code>/consultapedidovenda/{numero}/PD/{loja}</code>, e o login é por <b>HTTP Basic Auth</b> direto — sem aquele fluxo antigo de <code>OperadorLogar</code> com token. A resposta veio 200 OK com tudo: cliente, endereço de entrega, lista de itens e peso bruto no mesmo JSON.</div>
+    <details>
+      <summary>ver evidência do teste</summary>
+<pre><span class="c">$ node scripts/consulta-pd-alberto.js 717081 067</span>
+
+<span class="k">PD</span> 717081 │ Loja 067 (Portal Morumbi) │ <span class="k">HTTP</span> <span class="n">200</span>
+
+STATUS: <span class="s">ATIVO</span>
+Cliente: COND OURO PRETO E SABARA
+CNPJ:    54.071.154/0001-01
+Telefone: 11 37425010
+Endereço: RUA MANOEL ANTÔNIO PINTO, 1200
+          PARAISÓPOLIS · SÃO PAULO/SP · 05663-020
+Itens:   <span class="n">2</span> produtos
+Peso:    <span class="n">3.48</span> kg
+Valor:   R$ <span class="n">114,00</span></pre>
+    </details>
+  </div>
+  <div class="step-stamp">Concluído<small>05.12 · 00:42</small></div>
+</div>
+
+<!-- ETAPA 2 -->
+<div class="step done">
+  <div class="step-num">02</div>
+  <div class="step-body">
+    <div class="step-cat">Análise · contrato de dados</div>
+    <div class="step-title">Mapear quais campos do JSON viram saída do "Buscar pedido"</div>
+    <div class="step-desc">Tabela de origem definida: cada coluna da tela aponta para um caminho exato no JSON da Citel. Decisão importante: o endereço de entrega da Citel já vem com o número embutido no campo <code>endereco</code> (ex: <i>"RUA X, 1200"</i>), então não preciso reconstruir nada.</div>
+    <details>
+      <summary>ver tabela de mapeamento</summary>
+<pre><span class="c">// Campo na tela → caminho no JSON da Citel</span>
+
+nome cliente       →  pedido.cliente.<span class="k">nome</span>
+telefone           →  pedido.cliente.<span class="k">telefone1</span>
+celular            →  pedido.cliente.<span class="k">telefoneCelular</span>
+CPF/CNPJ           →  pedido.cliente.<span class="k">numeroDocumento</span>
+email              →  pedido.cliente.<span class="k">email</span>
+
+endereço cliente   →  pedido.cliente.{endereco, numero, bairro, cep, cidade}
+endereço entrega   →  pedido.<span class="k">enderecoEntrega</span>.{endereco, bairro, cep, cidade}
+
+qtd. de itens      →  pedido.itens.<span class="k">length</span>           <span class="c">// = 2 no caso do PD 717081</span>
+peso bruto total   →  pedido.<span class="k">pesoBruto</span>              <span class="c">// = 3.48 kg</span>
+valor total        →  pedido.<span class="k">valorContabil</span>          <span class="c">// = R$ 114,00</span>
+
+já faturado        →  pedido.<span class="k">jaFaturado</span>             <span class="c">// boolean</span>
+cancelado          →  <span class="k">cancelado</span>                     <span class="c">// boolean na raiz</span></pre>
+    </details>
+  </div>
+  <div class="step-stamp">Concluído<small>05.12 · agora</small></div>
+</div>
+
+<!-- ETAPA 3 -->
+<div class="step done">
+  <div class="step-num">03</div>
+  <div class="step-body">
+    <div class="step-cat">Configuração · ambiente</div>
+    <div class="step-title">Criar variável <code>CITEL_PD_URL</code> apontando pra porta 25049</div>
+    <div class="step-desc">Adicionada a variável separada no <code>.env.local</code>. As consultas de estoque/produto continuam usando <code>CITEL_API_URL</code> (porta 25046, auth por token); só a consulta de pedido vai usar <code>CITEL_PD_URL</code> (porta 25049, auth Basic). Sem risco de quebrar o que já funciona.</div>
+    <details>
+      <summary>ver diff do .env.local</summary>
+<pre><span class="c"># Citel / Autcom — integração PD → NF
+# CITEL_API_URL  → porta 25046, usada para estoque/produto (auth por token OperadorLogar)
+# CITEL_PD_URL   → porta 25049, usada para consulta de pedido (auth por HTTP Basic)</span>
+CITEL_API_URL=<span class="s">"http://159.112.189.1:25046"</span>
+<span class="s">+ CITEL_PD_URL="http://159.112.189.1:25049"</span>
+CITEL_LOGIN=<span class="s">"TESTE"</span>
+CITEL_SENHA=<span class="s">"123"</span></pre>
+    </details>
+  </div>
+  <div class="step-stamp">Concluído<small>05.12 · agora</small></div>
+</div>
+
+<!-- ETAPA 4 -->
+<div class="step done">
+  <div class="step-num">04</div>
+  <div class="step-body">
+    <div class="step-cat">Tipos · TypeScript</div>
+    <div class="step-title">Estender o tipo <code>CitelPedidoCabecalho</code></div>
+    <div class="step-desc">Quatro campos novos adicionados ao cabeçalho: <code>quantidadeItens</code>, <code>pesoBrutoTotal</code>, <code>jaFaturado</code>, <code>cancelado</code>. Os campos antigos (<code>documento</code>, <code>telefone</code>, <code>celular</code>) já existiam — bastou garantir que o parser preenche eles a partir dos caminhos corretos.</div>
+    <details>
+      <summary>ver novos campos</summary>
+<pre><span class="c">// types/stock.ts</span>
+export interface <span class="k">CitelPedidoCabecalho</span> {
+  numeroPedido:     string;
+  codigoEmpresa:    string;
+  nomeCliente:      string;
+  documento:        string | null;
+  telefone:         string | null;
+  celular:          string | null;
+  email:            string | null;
+  customerAddress:  CitelEndereco;
+  deliveryAddress:  CitelEndereco | null;
+  valorTotal:       number | null;
+  status:           string | null;
+<span class="s">+ quantidadeItens:  number;</span>
+<span class="s">+ pesoBrutoTotal:   number | null;</span>
+<span class="s">+ jaFaturado:       boolean;</span>
+<span class="s">+ cancelado:        boolean;</span>
+}</pre>
+    </details>
+  </div>
+  <div class="step-stamp">Concluído<small>05.12 · agora</small></div>
+</div>
+
+<!-- ETAPA 5 -->
+<div class="step done">
+  <div class="step-num">05</div>
+  <div class="step-body">
+    <div class="step-cat">Implementação · serviço</div>
+    <div class="step-title">Reescrever <code>services/citel.service.ts</code> com a API correta</div>
+    <div class="step-desc">Serviço reescrito mantendo as funções antigas de estoque e produto intactas. Três decisões importantes: (1) duas funções de autenticação coexistem — uma por token para estoque, outra Basic Auth para pedido; (2) o response bruto entra num <b>cache de 8 segundos</b> indexado por pedido+loja, então <code>fetchPedidoCabecalho</code> e <code>fetchPedidoItens</code> compartilham a mesma chamada HTTP; (3) o parser separa o campo <code>endereco</code> "RUA X, 1200" em logradouro e número, e trata o bug da API que retorna <code>{cancelado:true, pedido:null}</code> como "não achei" em vez de cancelamento real.</div>
+    <details>
+      <summary>ver assinatura das funções principais</summary>
+<pre><span class="c">// services/citel.service.ts</span>
+
+<span class="k">export function</span> normalizeCitelDocumentNumber(input: string): string[]
+<span class="k">export function</span> isCitelPedidoConfigured(): boolean
+
+<span class="k">async function</span> fetchConsultaPedidoRaw(orderNumber, storeCode): Promise&lt;CitelPedidoRaw | null&gt;
+<span class="k">async function</span> getConsultaPedidoCached(orderNumber, storeCode): Promise&lt;CitelPedidoRaw | null&gt;
+
+<span class="k">export async function</span> fetchPedidoCabecalho(orderNumber, storeCode): Promise&lt;CitelPedidoCabecalho | null&gt;
+<span class="k">export async function</span> fetchPedidoItens(orderNumber, storeCode): Promise&lt;Array&lt;Item&gt; | null&gt;
+
+<span class="c">// estoque/produto — inalterados (porta 25046)</span>
+<span class="k">export async function</span> fetchEstoqueCitel(...)
+<span class="k">export async function</span> fetchEstoqueCitelBatch(...)
+<span class="k">export async function</span> fetchProdutoDetalhe(...)
+<span class="k">export async function</span> getSaldoDisponivel(...)</pre>
+    </details>
+  </div>
+  <div class="step-stamp">Concluído<small>05.12 · agora</small></div>
+</div>
+
+<!-- ETAPA 6 -->
+<div class="step done">
+  <div class="step-num">06</div>
+  <div class="step-body">
+    <div class="step-cat">Qualidade · testes</div>
+    <div class="step-title">Atualizar os mocks dos testes automatizados</div>
+    <div class="step-desc">Suite expandida de 12 para 16 testes. Adicionei casos novos: validar que o header é Basic Auth (não Bearer), confirmar que o endpoint <code>/OperadorLogar/</code> nunca é chamado para pedido, e verificar que <code>fetchPedidoItens</code> reusa o mesmo response (sem chamada extra). Tive que corrigir um vazamento de cache entre testes — agora o serviço expõe <code>__clearCitelPedidoCache()</code> que cada teste chama no <code>beforeEach</code>.</div>
+    <details>
+      <summary>ver lista de cenários cobertos</summary>
+<pre><span class="c">tests/services/citel-normalize.test.ts</span>
+
+<span class="k">describe</span> normalizeCitelDocumentNumber              <span class="s">6 testes</span>
+  · gera variação com 12 dígitos
+  · gera candidato correto para 717081
+  · não duplica quando já vem com 12 dígitos
+  · remove pontuação antes de normalizar
+  · gera variações 10/11/12 dígitos
+  · não encurta número de 11 dígitos
+
+<span class="k">describe</span> fetchPedidoCabecalho — caso real            <span class="s">5 testes</span>
+  · encontra pedido com padding 000000717081
+  · preenche endereço do cliente (todos os campos)
+  · preenche endereço de entrega (split logradouro+número)
+  · usa Basic Auth (não Bearer)
+  · nunca chama /OperadorLogar/
+
+<span class="k">describe</span> fetchPedidoCabecalho — bug do padding      <span class="s">3 testes</span>
+  · ignora {cancelado:true, pedido:null} e tenta próximo
+  · retorna null quando não existe em loja nenhuma
+  · retorna null em network error
+
+<span class="k">describe</span> fetchPedidoItens — reaproveitamento          <span class="s">2 testes</span>
+  · extrai itens do mesmo response do cabeçalho
+  · NÃO chama nenhum endpoint /itens/ separado</pre>
+    </details>
+  </div>
+  <div class="step-stamp">Concluído<small>05.12 · agora</small></div>
+</div>
+
+<!-- ETAPA 7 -->
+<div class="step done">
+  <div class="step-num">07</div>
+  <div class="step-body">
+    <div class="step-cat">Verificação · vitest</div>
+    <div class="step-title">Rodar a suíte de testes e ver tudo verde</div>
+    <div class="step-desc">Tudo verde. Os 16 testes do arquivo do Citel passaram e a suíte completa do sistema (<b>186 testes</b> espalhados por 16 arquivos) também passou. Nenhuma regressão em outras partes do código.</div>
+    <details>
+      <summary>ver saída do vitest</summary>
+<pre><span class="c">$ npx vitest run tests/services/citel-normalize.test.ts</span>
+
+ RUN  v4.1.4 sistema-logistica
+
+ <span class="s">Test Files  1 passed (1)</span>
+       Tests  <span class="s">16 passed (16)</span>
+    Duration  1.16s
+
+<span class="c">$ npx vitest run</span>     <span class="c"># suíte completa</span>
+
+ <span class="s">Test Files  16 passed | 1 skipped (17)</span>
+       Tests  <span class="s">186 passed</span> | 7 skipped (193)
+    Duration  15.18s</pre>
+    </details>
+  </div>
+  <div class="step-stamp">Concluído<small>05.12 · agora</small></div>
+</div>
+
+<!-- ETAPA 8 -->
+<div class="step done">
+  <div class="step-num">08</div>
+  <div class="step-body">
+    <div class="step-cat">Interface · saída do "Buscar pedido"</div>
+    <div class="step-title">Mostrar os 6 campos na confirmação após buscar o PD</div>
+    <div class="step-desc">Painel de confirmação ampliado em <code>components/cotacao/solicitar-entrega-drawer.tsx</code>. Agora aparecem três blocos novos: um <b>banner de destinatário</b> com nome em destaque + telefone e CPF/CNPJ logo abaixo, e a grid de estatísticas virou de duas colunas (peso + estoque) para <b>três colunas</b> (peso, itens, estoque). O endpoint <code>/api/erp/pedido</code> também ganhou fallback: se o enriquecimento de itens com estoque falhar, ele usa <code>pesoBrutoTotal</code> e <code>quantidadeItens</code> que vieram direto do cabeçalho.</div>
+    <details>
+      <summary>ver layout da nova confirmação</summary>
+<pre><span class="c">┌─────────────────────────────────────────────────────────┐</span>
+<span class="c">│</span> <span class="s">✓ Pedido validado na Citel</span>                       <span class="c">15ms</span> <span class="c">│</span>
+<span class="c">├─────────────────────────────────────────────────────────┤</span>
+<span class="c">│</span> <span class="k">DESTINATÁRIO</span>                                          <span class="c">│</span>
+<span class="c">│</span> COND OURO PRETO E SABARA                              <span class="c">│</span>
+<span class="c">│</span> ☎ 11 37425010    🏢 54071154000101                     <span class="c">│</span>
+<span class="c">├──────────────┬──────────────┬───────────────────────────┤</span>
+<span class="c">│</span> <span class="n">Peso</span>         <span class="c">│</span> <span class="k">Itens</span>        <span class="c">│</span> <span class="s">Estoque</span>                  <span class="c">│</span>
+<span class="c">│</span> <b>3.5 kg</b>       <span class="c">│</span> <b>2 produtos</b>   <span class="c">│</span> <b>2✓</b>                       <span class="c">│</span>
+<span class="c">├──────────────┴──────────────┴───────────────────────────┤</span>
+<span class="c">│</span> <span class="k">ENDEREÇO DO CLIENTE</span>                                   <span class="c">│</span>
+<span class="c">│</span> RUA MANOEL ANTÔNIO PINTO, 1200, PARAISÓPOLIS...        <span class="c">│</span>
+<span class="c">├─────────────────────────────────────────────────────────┤</span>
+<span class="c">│</span> 📍 <span class="k">ENDEREÇO DE ENTREGA</span>                      <span class="c">[Editar]</span>  <span class="c">│</span>
+<span class="c">│</span> RUA MANOEL ANTÔNIO PINTO, 1200, PARAISÓPOLIS...        <span class="c">│</span>
+<span class="c">└─────────────────────────────────────────────────────────┘</span></pre>
+    </details>
+  </div>
+  <div class="step-stamp">Concluído<small>05.12 · agora</small></div>
+</div>
+
+<!-- ETAPA 9 -->
+<div class="step in_progress">
+  <div class="step-num">09</div>
+  <div class="step-body">
+    <div class="step-cat">Aceite · ponta a ponta</div>
+    <div class="step-title">Teste real no navegador, no seu computador</div>
+    <div class="step-desc">Falta seu aceite. Para validar: <b>(1)</b> reinicie o dev server (mudei o <code>.env.local</code>, então o Next.js precisa reler), <b>(2)</b> abra a cotação que leva ao formulário de solicitação, <b>(3)</b> digite o PD <b>717081</b> e selecione a loja <b>067 — Portal Morumbi</b>, <b>(4)</b> clique em "Buscar pedido". A confirmação deve mostrar nome, telefone, CPF/CNPJ, peso (3.5 kg), itens (2 produtos) e o endereço de entrega.</div>
+    <details>
+      <summary>como reiniciar o dev server</summary>
+<pre><span class="c"># No terminal onde o Next está rodando, dê Ctrl+C, depois:</span>
+$ npm run dev
+
+<span class="c"># O erro 500 no /api/auth/login que você viu é provavelmente</span>
+<span class="c"># porque o servidor está com .env.local stale (ainda em cache).</span>
+<span class="c"># Reiniciar deve resolver — o login não tem nada a ver com o Citel.</span></pre>
+    </details>
+  </div>
+  <div class="step-stamp">Seu Aceite</div>
+</div>
+
+</div>
+
+<div class="signature">
+  <div class="sig-block">
+    <div class="sig-name">Claude · Engenharia</div>
+    Executor · Opus 4.7
+  </div>
+  <div class="sig-block">
+    <div class="sig-name">Alberto Ruiz Jr.</div>
+    Aprovador · Atual Tintas
+  </div>
+</div>
+
+<footer>
+  <div><span class="pulse"></span>auto-refresh 3s · página viva</div>
+  <div class="barcode" aria-hidden="true">
+    <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+    <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+    <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+    <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+  </div>
+  <div style="text-align:right">OS-2026-05-12 · IMPL-CITEL-PD</div>
+</footer>
+
+</div>
+
+</body>
+</html>

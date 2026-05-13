@@ -2,9 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, ChevronDown, CheckCircle, ArrowRight, Truck, XCircle } from "lucide-react";
+import { Loader2, CheckCircle, ArrowRight, Truck, XCircle, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { TRANSFER_STATUS_LABELS } from "@/lib/constants";
 
 // mapeamento das ações disponíveis por status atual
 const NEXT_ACTIONS: Record<string, { label: string; nextStatus: string; icon: React.ComponentType<{ className?: string }>; color: string }[]> = {
@@ -17,6 +16,10 @@ const NEXT_ACTIONS: Record<string, { label: string; nextStatus: string; icon: Re
     { label: "Cancelar", nextStatus: "CANCELLED", icon: XCircle, color: "text-red-600 border-red-200 hover:bg-red-50" },
   ],
   PREPARING: [
+    { label: "Marcar como separada", nextStatus: "PREPARED", icon: CheckCircle, color: "text-teal-600 border-teal-200 hover:bg-teal-50" },
+    { label: "Cancelar", nextStatus: "CANCELLED", icon: XCircle, color: "text-red-600 border-red-200 hover:bg-red-50" },
+  ],
+  PREPARED: [
     { label: "Despachar", nextStatus: "IN_TRANSIT", icon: Truck, color: "text-orange-600 border-orange-200 hover:bg-orange-50" },
     { label: "Cancelar", nextStatus: "CANCELLED", icon: XCircle, color: "text-red-600 border-red-200 hover:bg-red-50" },
   ],
@@ -31,65 +34,151 @@ interface Props {
   transferId: string;
   currentStatus: string;
   priority: string;
+  /** Quando false, mostra os botões em modo "somente leitura" (cinza) */
+  canAct?: boolean;
+  /** Nome/code da loja origem — usado na mensagem quando o user não pode agir */
+  originStoreCode?: string;
 }
 
-export function TransferActionsPanel({ transferId, currentStatus, priority }: Props) {
+export function TransferActionsPanel({ transferId, currentStatus, priority, canAct = true, originStoreCode }: Props) {
   const router = useRouter();
-  const [loading, setLoading] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState(false);
+  const [loading,     setLoading]     = useState<string | null>(null);
+  const [cancelModal, setCancelModal] = useState(false);
+  const [reason,      setReason]      = useState("");
+  const [error,       setError]       = useState<string | null>(null);
 
   const actions = NEXT_ACTIONS[currentStatus] ?? [];
-
   if (actions.length === 0) return null;
 
-  async function handleAction(nextStatus: string) {
+  async function patchStatus(nextStatus: string, extra: Record<string, unknown> = {}) {
     setLoading(nextStatus);
+    setError(null);
     try {
       const res = await fetch(`/api/transferencias/${transferId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: nextStatus }),
+        body: JSON.stringify({ status: nextStatus, ...extra }),
       });
-
       const json = await res.json();
-
       if (!res.ok || !json.success) {
-        alert(json.error ?? "Erro ao atualizar transferência");
-        return;
+        setError(json.error ?? "Erro ao atualizar transferência");
+        return false;
       }
-
       router.refresh();
+      return true;
     } catch {
-      alert("Erro de conexão. Tente novamente.");
+      setError("Erro de conexão. Tente novamente.");
+      return false;
     } finally {
       setLoading(null);
     }
   }
 
+  async function handleAction(nextStatus: string) {
+    if (!canAct) return;
+    if (nextStatus === "CANCELLED") {
+      setCancelModal(true);
+      return;
+    }
+    await patchStatus(nextStatus);
+  }
+
+  async function handleConfirmCancel() {
+    if (reason.trim().length < 10) {
+      setError("Informe o motivo do cancelamento (mín. 10 caracteres)");
+      return;
+    }
+    const ok = await patchStatus("CANCELLED", { cancellationReason: reason.trim() });
+    if (ok) {
+      setCancelModal(false);
+      setReason("");
+    }
+  }
+
   return (
-    <div className={cn(
-      "border-t px-5 py-3 flex items-center gap-2",
-      priority === "URGENT" ? "border-red-100" : "border-gray-100"
-    )}>
-      <span className="text-xs text-gray-400 mr-1">Ações:</span>
-      {actions.map((action) => (
-        <button
-          key={action.nextStatus}
-          onClick={() => handleAction(action.nextStatus)}
-          disabled={loading !== null}
-          className={cn(
-            "flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors disabled:opacity-50",
-            action.color
-          )}
-        >
-          {loading === action.nextStatus ? (
-            <Loader2 className="w-3 h-3 animate-spin" />
-          ) : (
-            <action.icon className="w-3 h-3" />
-          )}
-          {action.label}
-        </button>
-      ))}
-    </div>
+    <>
+      <div className={cn(
+        "border-t px-5 py-3 flex items-center gap-2 flex-wrap",
+        priority === "URGENT" ? "border-red-100" : "border-gray-100"
+      )}>
+        <span className="text-xs text-gray-400 mr-1">Ações:</span>
+        {actions.map((action) => (
+          <button
+            key={action.nextStatus}
+            onClick={() => handleAction(action.nextStatus)}
+            disabled={!canAct || loading !== null}
+            title={!canAct ? `Apenas operadores da Loja ${originStoreCode ?? "origem"} podem agir` : undefined}
+            className={cn(
+              "flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors disabled:opacity-40 disabled:cursor-not-allowed",
+              canAct ? action.color : "text-gray-400 border-gray-200"
+            )}
+          >
+            {loading === action.nextStatus ? (
+              <Loader2 className="w-3 h-3 animate-spin" />
+            ) : (
+              <action.icon className="w-3 h-3" />
+            )}
+            {action.label}
+          </button>
+        ))}
+        {!canAct && originStoreCode && (
+          <span className="text-[11px] text-gray-400 ml-1">
+            Aprovação/cancelamento pela Loja {originStoreCode}
+          </span>
+        )}
+      </div>
+
+      {/* Modal de cancelamento — motivo obrigatório */}
+      {cancelModal && (
+        <>
+          <div className="fixed inset-0 z-[80] bg-black/50 backdrop-blur-[2px]" onClick={() => !loading && setCancelModal(false)} />
+          <div className="fixed inset-0 z-[81] flex items-center justify-center p-4 pointer-events-none">
+            <div className="pointer-events-auto bg-white rounded-xl shadow-2xl w-full max-w-md flex flex-col overflow-hidden border border-gray-200">
+              <div className="px-5 py-4 border-b border-gray-100 flex items-start gap-2.5">
+                <AlertTriangle className="w-5 h-5 flex-shrink-0 mt-0.5 text-red-500" />
+                <div className="min-w-0">
+                  <h2 className="text-[14px] font-bold text-gray-900 leading-tight">Cancelar transferência</h2>
+                  <p className="text-[11.5px] text-gray-500 mt-1 leading-relaxed">
+                    O pedido voltará para <b>Aguardando transferência</b> e o Jhow será notificado para criar uma nova transferência no Autcom.
+                  </p>
+                </div>
+              </div>
+              <div className="px-5 py-4 space-y-2">
+                <label className="block text-[11.5px] font-semibold text-gray-700">
+                  Motivo do cancelamento <span className="text-red-500">*</span>
+                </label>
+                <textarea
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  rows={3}
+                  placeholder="Ex: O estoque do produto na nossa loja está zerado no momento. Aguardando reposição."
+                  disabled={loading !== null}
+                  className="w-full px-3 py-2 rounded-lg text-[12.5px] border border-gray-300 outline-none disabled:opacity-50 resize-none focus:border-red-400"
+                />
+                <p className="text-[10.5px] text-gray-400">
+                  Mínimo 10 caracteres. {reason.trim().length}/10
+                </p>
+                {error && <p className="text-[11px] text-red-600 font-medium">{error}</p>}
+              </div>
+              <div className="px-5 py-3 border-t border-gray-100 flex justify-end gap-2 bg-gray-50">
+                <button
+                  onClick={() => { setCancelModal(false); setReason(""); setError(null); }}
+                  disabled={loading !== null}
+                  className="px-4 py-2 rounded-lg text-[12.5px] font-medium text-gray-700 hover:bg-gray-200 disabled:opacity-50">
+                  Voltar
+                </button>
+                <button
+                  onClick={handleConfirmCancel}
+                  disabled={loading !== null || reason.trim().length < 10}
+                  className="px-4 py-2 rounded-lg text-[12.5px] font-semibold bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 flex items-center gap-1.5">
+                  {loading === "CANCELLED" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <XCircle className="w-3.5 h-3.5" />}
+                  Cancelar transferência
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+    </>
   );
 }

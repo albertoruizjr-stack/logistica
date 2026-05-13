@@ -4,16 +4,26 @@ import { calculateFreightQuote, saveFreightQuote } from "@/services/frete.servic
 import { getSessionFromRequest } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/types";
 
+const DELIVERY_OPTIONS = ["SAME_DAY", "TOMORROW_FIRST", "TOMORROW_SECOND", "EXPRESS", "SCHEDULED"] as const;
+
 const schema = z.object({
-  storeId: z.string(),
-  originAddress: z.string().min(1),
-  originLat: z.number(),
-  originLng: z.number(),
-  destAddress: z.string().min(1),
-  destLat: z.number(),
-  destLng: z.number(),
-  isUrgent: z.boolean().default(false),
-  save: z.boolean().default(false), // se deve persistir no banco
+  storeId:        z.string(),
+  originAddress:  z.string().min(1),
+  originLat:      z.number(),
+  originLng:      z.number(),
+  destAddress:    z.string().min(1),
+  destLat:        z.number(),
+  destLng:        z.number(),
+  deliveryOption: z.enum(DELIVERY_OPTIONS).default("TOMORROW_FIRST"),
+  scheduledFor:   z.string().optional(),
+  cutoffException: z.boolean().optional(),
+  cutoffExceptionReason: z.string().optional(),
+  city:           z.string().optional(),
+  state:          z.string().optional(),
+  quotedAddress:  z.string().optional(),
+  // legado — mantido para compatibilidade com chamadas antigas
+  isUrgent:       z.boolean().optional(),
+  save:           z.boolean().optional(),
 });
 
 export async function POST(req: NextRequest) {
@@ -33,15 +43,26 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const result = await calculateFreightQuote(parsed.data);
-
-    // persiste se solicitado (antes de criar a solicitação de entrega)
-    if (parsed.data.save) {
-      const saved = await saveFreightQuote(parsed.data, result, session.userId);
-      return NextResponse.json(apiSuccess({ ...result, quoteId: saved.id, zone: saved.zone }));
+    // compatibilidade: se isUrgent=true e não tem deliveryOption, mapeia para EXPRESS
+    let data = parsed.data;
+    if (data.isUrgent && !body.deliveryOption) {
+      data = { ...data, deliveryOption: "EXPRESS" };
     }
 
-    return NextResponse.json(apiSuccess(result));
+    const result = await calculateFreightQuote(data);
+
+    // sempre salva — salvo quando chamada é explicitamente save=false (preview)
+    if (data.save === false) {
+      return NextResponse.json(apiSuccess(result));
+    }
+
+    const saved = await saveFreightQuote(data, result, session.userId);
+    return NextResponse.json(apiSuccess({
+      ...result,
+      quoteId:   saved.id,
+      zone:      saved.zone,
+      expiresAt: saved.expiresAt?.toISOString(),
+    }));
   } catch (error) {
     console.error("[POST /api/frete/cotacao]", error);
     return NextResponse.json(apiError("Erro ao calcular frete"), { status: 500 });

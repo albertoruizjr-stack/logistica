@@ -13,15 +13,26 @@ import { NfLinkAdminPanel } from "./_components/nf-link-admin-panel";
 // ─── Config de abas ────────────────────────────────────────
 
 
+// Aba "Ativas" cobre TODO o ciclo de vida operacional até a saída pra rota.
+// Inclui as fases novas (Separação, Fiscal, Roteirização) que antes ficavam órfãs.
+const ACTIVE_STATUSES: DeliveryRequestStatus[] = [
+  "AWAITING_ITEMS", "PENDING", "AWAITING_TRANSFER",
+  "SEPARADO",
+  "AGUARDANDO_NF", "NF_VINCULADA",
+  "PRONTO_ROTEIRIZACAO", "ROTEIRIZADO",
+  "READY",
+  "OCORRENCIA",
+];
+
 const TAB_STATUSES: Record<string, DeliveryRequestStatus[]> = {
-  ativas:    ["AWAITING_ITEMS", "PENDING", "AWAITING_TRANSFER", "READY"],
+  ativas:    ACTIVE_STATUSES,
   rota:      ["DISPATCHED", "IN_TRANSIT"],
   entregues: ["DELIVERED"],
   canceladas: ["CANCELLED"],
 };
 
 const TAB_SECTIONS: Record<string, string[]> = {
-  ativas:    ["AWAITING_ITEMS", "PENDING", "AWAITING_TRANSFER", "READY"],
+  ativas:    ACTIVE_STATUSES,
   rota:      ["DISPATCHED", "IN_TRANSIT"],
   entregues: ["DELIVERED"],
   canceladas: ["CANCELLED"],
@@ -40,24 +51,28 @@ const TAB_SECTIONS: Record<string, string[]> = {
 function priorityOrder(row: SolicitacaoCardData): number {
   const err = row.nfLinkError;
 
-  // 0 — erros críticos NF sem revisão (risco imediato de despacho indevido)
-  if (err === "MULTIPLE_NF" || err === "PD_CANCELLED_IN_CITEL") return 0;
-  // 1 — urgente
-  if (row.deliveryType === DeliveryType.URGENT) return 1;
-  // 2 — faturamento parcial ativo (não revisado)
-  if (err === "PARTIAL_BILLING") return 2;
-  // 3 — entrega hoje
+  // 0 — ERP crítico (pedido cancelado/bloqueado no Autcom — risco de despacho indevido)
+  if (row.erpAlertSeverity === "CRITICAL") return 0;
+  // 1 — erros críticos NF sem revisão
+  if (err === "MULTIPLE_NF" || err === "PD_CANCELLED_IN_CITEL") return 1;
+  // 2 — urgente
+  if (row.deliveryType === DeliveryType.URGENT) return 2;
+  // 3 — faturamento parcial ativo (não revisado)
+  if (err === "PARTIAL_BILLING") return 3;
+  // 4 — entrega hoje
   const today = new Date().toDateString();
-  if (row.scheduledFor && new Date(row.scheduledFor).toDateString() === today) return 3;
-  // 4 — PD não encontrado (possível número errado)
-  if (err === "PD_NOT_FOUND") return 4;
-  // 5 — READY parado > 2h
+  if (row.scheduledFor && new Date(row.scheduledFor).toDateString() === today) return 4;
+  // 5 — PD não encontrado (possível número errado)
+  if (err === "PD_NOT_FOUND") return 5;
+  // 6 — alerta ERP de warning (itens/endereço alterados)
+  if (row.erpAlertCount > 0) return 6;
+  // 7 — READY parado > 2h
   const ageMs = Date.now() - new Date(row.createdAt).getTime();
-  if (row.status === "READY"          && ageMs > 2 * 3_600_000) return 5;
-  // 6 — AWAITING_ITEMS parado > 30min
-  if (row.status === "AWAITING_ITEMS" && ageMs > 30 * 60_000)   return 6;
-  // 7 — normal (inclui estados revisados — já foram reconhecidos pelo operador)
-  return 7;
+  if (row.status === "READY"          && ageMs > 2 * 3_600_000) return 7;
+  // 8 — AWAITING_ITEMS parado > 30min
+  if (row.status === "AWAITING_ITEMS" && ageMs > 30 * 60_000)   return 8;
+  // 9 — normal (inclui estados revisados — já foram reconhecidos pelo operador)
+  return 9;
 }
 
 // ─── Page ──────────────────────────────────────────────────
@@ -92,7 +107,7 @@ export default async function SolicitacoesPage({
   );
 
   const tabCounts = {
-    ativas:    ["AWAITING_ITEMS", "PENDING", "AWAITING_TRANSFER", "READY"].reduce((s, k) => s + (countMap[k] ?? 0), 0),
+    ativas:    ACTIVE_STATUSES.reduce((s, k) => s + (countMap[k] ?? 0), 0),
     rota:      ["DISPATCHED", "IN_TRANSIT"].reduce((s, k) => s + (countMap[k] ?? 0), 0),
     entregues: countMap.DELIVERED ?? 0,
     canceladas: countMap.CANCELLED ?? 0,
@@ -145,6 +160,27 @@ export default async function SolicitacoesPage({
     take: 300,
   });
 
+  // ── Alertas ERP abertos por solicitação ──
+  // Usa raw SQL porque ERPSyncAlert ainda não está no Prisma client gerado.
+  // O .catch(() => []) garante que a página funciona antes da migration rodar.
+  const requestIds = requests.map((r) => r.id);
+  type ERPAlertAggRow = { deliveryRequestId: string; alertCount: bigint; topSeverity: string };
+  const erpAlertRows: ERPAlertAggRow[] = requestIds.length > 0
+    ? await prisma.$queryRawUnsafe<ERPAlertAggRow[]>(
+        `SELECT "deliveryRequestId",
+                COUNT(*) AS "alertCount",
+                (ARRAY_AGG(severity ORDER BY CASE severity WHEN 'CRITICAL' THEN 0 WHEN 'WARNING' THEN 1 ELSE 2 END))[1] AS "topSeverity"
+         FROM erp_sync_alerts
+         WHERE "deliveryRequestId" = ANY($1::text[]) AND "isResolved" = FALSE
+         GROUP BY "deliveryRequestId"`,
+        requestIds,
+      ).catch(() => [] as ERPAlertAggRow[])
+    : [];
+
+  const erpAlertMap = new Map(
+    erpAlertRows.map((r) => [r.deliveryRequestId, { count: Number(r.alertCount), severity: r.topSeverity }]),
+  );
+
   // ── Serializa e ordena ──
   const rows: SolicitacaoCardData[] = requests
     .map((req) => ({
@@ -153,6 +189,8 @@ export default async function SolicitacoesPage({
       orderStoreCode:  req.orderStore?.code ?? null,
       invoiceNumber:   req.invoiceNumber,
       nfLinkError:     req.nfLinkError,
+      erpAlertCount:   erpAlertMap.get(req.id)?.count ?? 0,
+      erpAlertSeverity: erpAlertMap.get(req.id)?.severity ?? null,
       status:          req.status,
       deliveryType:    req.deliveryType,
       scheduledFor:    req.scheduledFor?.toISOString() ?? null,

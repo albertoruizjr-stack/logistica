@@ -78,7 +78,7 @@ export async function DELETE(req: NextRequest, { params }: RouteParams) {
     const session = await getSessionFromRequest(req);
     if (!session) return NextResponse.json(apiError("Não autenticado"), { status: 401 });
 
-    if (!["ADMIN", "OPERATOR"].includes(session.role)) {
+    if (!["ADMIN", "OPERATOR", "STOCK_OPERATOR", "LOGISTICS_OPERATOR", "STORE_LEADER"].includes(session.role)) {
       return NextResponse.json(apiError("Sem permissão", "FORBIDDEN"), { status: 403 });
     }
 

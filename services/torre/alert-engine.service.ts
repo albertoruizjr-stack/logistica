@@ -48,14 +48,19 @@ async function resolveAdminOwner(): Promise<string> {
 async function resolveOwner(storeId: string, role: OwnerRole): Promise<string> {
   let user: { id: string } | null = null;
 
-  if (role === "COMPRAS" || role === "LOGISTICA") {
+  if (role === "COMPRAS") {
     user = await prisma.user.findFirst({
-      where: { role: "OPERATOR", active: true },
+      where: { role: { in: ["BUYER", "OPERATOR", "LOGISTICS_OPERATOR"] }, active: true },
+      select: { id: true },
+    });
+  } else if (role === "LOGISTICA") {
+    user = await prisma.user.findFirst({
+      where: { role: { in: ["LOGISTICS_OPERATOR", "OPERATOR"] }, active: true },
       select: { id: true },
     });
   } else if (role === "LIDER_ORIGEM" || role === "LIDER_DESTINO") {
     user = await prisma.user.findFirst({
-      where: { role: "OPERATOR", storeId, active: true },
+      where: { role: { in: ["STOCK_OPERATOR", "OPERATOR", "LOGISTICS_OPERATOR"] }, storeId, active: true },
       select: { id: true },
     });
   } else if (role === "ADMIN") {

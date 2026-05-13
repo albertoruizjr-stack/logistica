@@ -56,7 +56,7 @@ function SlaChip({ status, minutesLeft }: { status: string; minutesLeft: number 
 export default async function RupturaPage({ searchParams }: { searchParams: SearchParams }) {
   const session = await getSession();
   if (!session) redirect("/login");
-  if (!["ADMIN", "OPERATOR"].includes(session.role)) redirect("/dashboard");
+  if (!["ADMIN", "OPERATOR", "STOCK_OPERATOR", "LOGISTICS_OPERATOR", "STORE_LEADER"].includes(session.role)) redirect("/dashboard");
 
   const OPEN_STATUSES = ["PENDING", "IN_PROGRESS", "NEEDS_MANUAL_CONFIRMATION"] as const;
 

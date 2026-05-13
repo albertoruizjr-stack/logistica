@@ -6,20 +6,27 @@ import { DISPATCH_MODAL_LABELS } from "@/lib/constants";
 import { cn, formatCurrency, formatRelativeTime } from "@/lib/utils";
 import {
   Truck, Zap, ArrowLeftRight, Package,
-  Users, Clock, CheckCircle, type LucideIcon,
+  Users, Clock, CheckCircle, Map as MapIcon, type LucideIcon,
 } from "lucide-react";
 import { DispatchActionPanel } from "@/components/despacho/dispatch-actions";
 import { PageHeader, MetricCard, EmptyState, AlertBanner } from "@/components/ui";
+import RouteDispatchPanel from "./_components/route-dispatch-panel";
+
+interface SequenceStop {
+  stopPosition:      number | null;
+  deliveryRequestId: string;
+  eta:               number | null;
+}
 
 export default async function DespachoPainel() {
   const session = await getSession();
   if (!session) redirect("/login");
 
-  if (!["ADMIN", "OPERATOR"].includes(session.role)) {
+  if (!["ADMIN", "OPERATOR", "STOCK_OPERATOR", "LOGISTICS_OPERATOR", "STORE_LEADER"].includes(session.role)) {
     redirect("/dashboard");
   }
 
-  const [dispatches, drivers, readyForDispatch] = await Promise.all([
+  const [dispatches, drivers, readyForDispatch, activeRoutes] = await Promise.all([
     listPendingDispatches(),
     prisma.driver.findMany({
       where: { active: true },
@@ -35,17 +42,58 @@ export default async function DespachoPainel() {
       },
       orderBy: { createdAt: "asc" },
     }),
+    prisma.route.findMany({
+      where: { status: "ACTIVE" },
+      include: {
+        driver: { select: { id: true, name: true, phone: true, vehicleType: true } },
+        wave:   { select: { name: true } },
+      },
+      orderBy: { createdAt: "asc" },
+    }),
   ]);
+
+  // Coleta metadados das DRs nas rotas ativas (uma query única)
+  const routeStopIds = activeRoutes.flatMap((r) => {
+    const seq = (r.sequenceJson as unknown as SequenceStop[] | null) ?? [];
+    return seq.map((s) => s.deliveryRequestId);
+  });
+  const routeStopsMeta = routeStopIds.length > 0
+    ? await prisma.deliveryRequest.findMany({
+        where: { id: { in: routeStopIds } },
+        select: {
+          id:              true,
+          orderNumber:     true,
+          invoiceNumber:   true,
+          customerName:    true,
+          customerPhone:   true,
+          deliveryAddress: true,
+          deliveryCity:    true,
+          totalWeightKg:   true,
+          totalLatas:      true,
+        },
+      })
+    : [];
+  const routeStopsMetaMapped = routeStopsMeta.map((d) => ({
+    deliveryRequestId: d.id,
+    orderNumber:       d.orderNumber,
+    invoiceNumber:     d.invoiceNumber,
+    customerName:      d.customerName,
+    customerPhone:     d.customerPhone,
+    deliveryAddress:   d.deliveryAddress,
+    deliveryCity:      d.deliveryCity,
+    totalWeightKg:     d.totalWeightKg,
+    totalLatas:        d.totalLatas,
+  }));
 
   const pendingCount = dispatches.filter((d) => d.status === "PENDING").length;
   const inTransitCount = dispatches.filter((d) => d.status === "IN_TRANSIT").length;
   const availableDrivers = drivers.filter((d) => d.available).length;
 
   const kpis: { label: string; value: number; icon: LucideIcon; variant: "default" | "warning" | "success" }[] = [
-    { label: "Prontos para despacho", value: readyForDispatch.length, icon: Package, variant: "default"  },
-    { label: "Despachos pendentes",   value: pendingCount,            icon: Clock,   variant: "warning"  },
-    { label: "Em trânsito",           value: inTransitCount,          icon: Truck,   variant: "default"  },
-    { label: "Motoristas disponíveis", value: availableDrivers,       icon: Users,   variant: "success"  },
+    { label: "Rotas prontas",          value: activeRoutes.length,    icon: MapIcon, variant: "default"  },
+    { label: "Prontos (individual)",   value: readyForDispatch.length, icon: Package, variant: "default"  },
+    { label: "Despachos pendentes",    value: pendingCount,            icon: Clock,   variant: "warning"  },
+    { label: "Motoristas disponíveis", value: availableDrivers,        icon: Users,   variant: "success"  },
   ];
 
   return (
@@ -71,9 +119,44 @@ export default async function DespachoPainel() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Solicitações prontas para despacho */}
         <div className="lg:col-span-2 space-y-4">
-          <h2 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+          {/* Rotas otimizadas pelo Spoke — agrupamento de várias DRs por motorista */}
+          {activeRoutes.length > 0 && (
+            <>
+              <h2 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+                <MapIcon className="w-4 h-4 text-orange-500" />
+                Rotas prontas (otimizadas)
+                <span className="bg-orange-100 text-orange-700 text-xs px-1.5 py-0.5 rounded-full">
+                  {activeRoutes.length}
+                </span>
+              </h2>
+              {activeRoutes.map((route) => {
+                const seq = (route.sequenceJson as unknown as SequenceStop[] | null) ?? [];
+                return (
+                  <RouteDispatchPanel
+                    key={route.id}
+                    route={{
+                      id:                route.id,
+                      name:              route.name,
+                      status:            route.status,
+                      waveName:          route.wave?.name ?? null,
+                      driver:            route.driver,
+                      stopCount:         route.stopCount,
+                      totalWeightKg:     route.totalWeightKg,
+                      estimatedReturnAt: route.estimatedReturnAt?.toISOString() ?? null,
+                      sequenceJson:      seq,
+                    }}
+                    stopsMeta={routeStopsMetaMapped.filter((m) =>
+                      seq.some((s) => s.deliveryRequestId === m.deliveryRequestId),
+                    )}
+                  />
+                );
+              })}
+            </>
+          )}
+
+          <h2 className="text-sm font-semibold text-gray-700 flex items-center gap-2 mt-2">
             <Package className="w-4 h-4 text-orange-500" />
-            Prontos para despacho
+            Prontos para despacho individual
             {readyForDispatch.length > 0 && (
               <span className="bg-orange-100 text-orange-700 text-xs px-1.5 py-0.5 rounded-full">
                 {readyForDispatch.length}

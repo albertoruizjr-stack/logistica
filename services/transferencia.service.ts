@@ -14,6 +14,7 @@ import { TransferStatus, TransferPriority } from "@prisma/client";
 import type { CreateTransferInput, UpdateTransferStatusInput } from "@/types";
 import { fetchStockByProduct } from "./erp.service";
 import { transitionDeliveryRequest } from "@/services/state-machine.service";
+import { notifyOrderSeparated } from "@/services/notifications.service";
 import {
   preCheckStock,
   commitStock,
@@ -187,6 +188,7 @@ export async function updateTransferStatus(
         approvedById:   input.status === TransferStatus.APPROVED   ? input.changedById : undefined,
         approvedAt:     input.status === TransferStatus.APPROVED   ? now : undefined,
         preparingAt:    input.status === TransferStatus.PREPARING  ? now : undefined,
+        preparedAt:     input.status === TransferStatus.PREPARED   ? now : undefined,
         dispatchedAt:   input.status === TransferStatus.IN_TRANSIT ? now : undefined,
         receivedAt:     input.status === TransferStatus.RECEIVED   ? now : undefined,
         cancelledAt:    input.status === TransferStatus.CANCELLED  ? now : undefined,
@@ -274,7 +276,7 @@ export async function updateTransferStatus(
 
     // markInTransit foi chamado em APPROVED → precisa cancelar qtdEmTransito no destino
     const hadTransit = (
-      [TransferStatus.APPROVED, TransferStatus.PREPARING, TransferStatus.IN_TRANSIT] as TransferStatus[]
+      [TransferStatus.APPROVED, TransferStatus.PREPARING, TransferStatus.PREPARED, TransferStatus.IN_TRANSIT] as TransferStatus[]
     ).includes(current.status);
 
     if (hadTransit) {
@@ -325,9 +327,9 @@ export async function updateTransferStatus(
     }
   }
 
-  // Verifica se a solicitação vinculada pode avançar para READY
+  // Atualiza a solicitação vinculada — parcial ou completa
   if (input.status === TransferStatus.RECEIVED && current.deliveryRequestId) {
-    await checkAndAdvanceDeliveryRequest(current.deliveryRequestId);
+    await handleTransferReceivedOnRequest(transferId, current.deliveryRequestId);
   }
 
   return updated;
@@ -337,36 +339,133 @@ export async function updateTransferStatus(
 // HELPERS INTERNOS
 // ──────────────────────────────────────────────
 
-// Avança para SEPARADO somente se todas as transferências foram recebidas sem divergências.
-// Usa state machine para garantir auditoria e validação de gates.
-async function checkAndAdvanceDeliveryRequest(deliveryRequestId: string) {
+// Atualiza a DeliveryRequest quando uma transferência vinculada é recebida.
+//
+// Comportamento:
+// - Recebimento PARCIAL → não muda status, mas registra um marker na
+//   DeliveryStatusHistory com progresso (X de Y recebidas) pra auditoria
+//   e timeline. Notificação ao vendedor é feita pela API route.
+// - Recebimento COMPLETO → avança pra SEPARADO via state machine,
+//   independente de divergência. metadata reflete se houve divergência
+//   pra revisão posterior. Se gate falhar (ex: itens não disponíveis no
+//   estoque), faz fallback pra READY com history manual.
+async function handleTransferReceivedOnRequest(
+  transferId: string,
+  deliveryRequestId: string,
+) {
   const transfers = await prisma.transfer.findMany({
     where: { deliveryRequestId },
+    select: { id: true, status: true, hasDivergence: true, divergenceCount: true },
   });
 
-  const allClear = transfers.every(
-    (t) => t.status === TransferStatus.RECEIVED && !t.hasDivergence
-  );
+  const total = transfers.length;
+  const receivedCount = transfers.filter((t) => t.status === TransferStatus.RECEIVED).length;
+  const hasDivergences = transfers.some((t) => t.hasDivergence);
+  const totalDivergences = transfers.reduce((sum, t) => sum + (t.divergenceCount ?? 0), 0);
 
-  if (!allClear) return;
+  const request = await prisma.deliveryRequest.findUnique({
+    where:  { id: deliveryRequestId },
+    select: { status: true },
+  });
+  if (!request) return;
+
+  const currentStatus = request.status;
+  const partial = receivedCount < total;
+
+  // Marker informativo: registra cada transfer recebida no histórico da DR,
+  // mesmo quando o status não muda. fromStatus = toStatus é a convenção pra
+  // marker (a UI sabe filtrar quando exibir a timeline).
+  await prisma.deliveryStatusHistory.create({
+    data: {
+      deliveryRequestId,
+      fromStatus: currentStatus,
+      toStatus:   currentStatus,
+      reason: partial
+        ? `Transferência recebida (${receivedCount}/${total})${hasDivergences ? " — com divergência" : ""}`
+        : `Todas as ${total} transferência${total > 1 ? "s" : ""} recebida${total > 1 ? "s" : ""}${hasDivergences ? " — com divergência" : ""}`,
+      metadata: {
+        event: "TRANSFER_RECEIVED",
+        transferId,
+        receivedCount,
+        totalTransfers: total,
+        hasDivergences,
+        totalDivergences,
+        partial,
+      },
+    },
+  });
+
+  // Se ainda há transferências pendentes, para aqui — não avança status.
+  if (partial) return;
+
+  // Todas recebidas → tenta avançar pra SEPARADO via state machine.
+  // Avança independente de divergência (operador revisa depois).
+  const reason = hasDivergences
+    ? `Todas as ${total} transferência${total > 1 ? "s" : ""} recebida${total > 1 ? "s" : ""} — com ${totalDivergences} divergência${totalDivergences > 1 ? "s" : ""} (revisão recomendada)`
+    : `Todas as ${total} transferência${total > 1 ? "s" : ""} recebida${total > 1 ? "s" : ""} sem divergências`;
 
   try {
     await transitionDeliveryRequest({
-      requestId: deliveryRequestId,
-      actorId: "SYSTEM",
-      actorRole: "SYSTEM",
-      toStatus: "SEPARADO",
+      requestId:  deliveryRequestId,
+      actorId:    "SYSTEM",
+      actorRole:  "SYSTEM",
+      toStatus:   "SEPARADO",
       metadata: {
-        reason: "Todas as transferências recebidas sem divergências",
-        separatedBy: "SYSTEM",
+        reason,
+        separatedBy:    "SYSTEM",
+        hasDivergences,
+        totalDivergences,
       },
     });
-  } catch {
-    // Se gate falhar (ex: itens ainda indisponíveis), avança para READY (fluxo legado)
-    // e deixa o operador gerenciar manualmente
-    await prisma.deliveryRequest.update({
-      where: { id: deliveryRequestId },
-      data: { status: "READY", isComplete: true },
+
+    // Notifica vendedor + logística — state machine não dispara notificação automática.
+    const dr = await prisma.deliveryRequest.findUnique({
+      where:  { id: deliveryRequestId },
+      select: { orderNumber: true, orderStore: { select: { code: true } } },
+    });
+    void notifyOrderSeparated({
+      deliveryRequestId,
+      orderNumber: dr?.orderNumber ?? null,
+      storeCode:   dr?.orderStore?.code,
+    });
+  } catch (err) {
+    // Fallback: gate falhou (ex: itens ainda indisponíveis no estoque).
+    // Move pra READY (fluxo legado) e registra history manual já que pulou state machine.
+    console.error(
+      `[transferencia] gate SEPARADO falhou para ${deliveryRequestId}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+    await prisma.$transaction(async (tx) => {
+      await tx.deliveryRequest.update({
+        where: { id: deliveryRequestId },
+        data:  { status: "READY", isComplete: true },
+      });
+      await tx.deliveryStatusHistory.create({
+        data: {
+          deliveryRequestId,
+          fromStatus: currentStatus,
+          toStatus:   "READY",
+          reason:     `${reason} (fallback READY — gate SEPARADO falhou)`,
+          metadata: {
+            event: "TRANSFER_RECEIVED_COMPLETE_FALLBACK",
+            hasDivergences,
+            totalDivergences,
+            gateError: err instanceof Error ? err.message : String(err),
+          },
+        },
+      });
+    });
+
+    // Notifica mesmo no fallback — vendedor precisa saber que o pedido está pronto.
+    const dr = await prisma.deliveryRequest.findUnique({
+      where:  { id: deliveryRequestId },
+      select: { orderNumber: true, orderStore: { select: { code: true } } },
+    });
+    void notifyOrderSeparated({
+      deliveryRequestId,
+      orderNumber: dr?.orderNumber ?? null,
+      storeCode:   dr?.orderStore?.code,
     });
   }
 }
@@ -433,6 +532,9 @@ export async function listTransfers(filters: {
   priority?: TransferPriority;
   fromStoreId?: string;
   toStoreId?: string;
+  // Filtra transferências onde a loja aparece como origem OU destino.
+  // Usado para auto-filtrar STORE_LEADER/SELLER pela sua loja.
+  relatedToStoreId?: string;
   deliveryRequestId?: string;
   limit?: number;
   offset?: number;
@@ -446,6 +548,9 @@ export async function listTransfers(filters: {
     ...(filters.priority         ? { priority: filters.priority }                 : {}),
     ...(filters.fromStoreId      ? { fromStoreId: filters.fromStoreId }           : {}),
     ...(filters.toStoreId        ? { toStoreId: filters.toStoreId }               : {}),
+    ...(filters.relatedToStoreId
+      ? { OR: [{ fromStoreId: filters.relatedToStoreId }, { toStoreId: filters.relatedToStoreId }] }
+      : {}),
     ...(filters.deliveryRequestId ? { deliveryRequestId: filters.deliveryRequestId } : {}),
   };
 
@@ -482,7 +587,8 @@ export async function listTransfers(filters: {
 const VALID_TRANSITIONS: Record<TransferStatus, TransferStatus[]> = {
   PENDING:    [TransferStatus.APPROVED,   TransferStatus.CANCELLED],
   APPROVED:   [TransferStatus.PREPARING,  TransferStatus.CANCELLED],
-  PREPARING:  [TransferStatus.IN_TRANSIT, TransferStatus.CANCELLED],
+  PREPARING:  [TransferStatus.PREPARED,   TransferStatus.CANCELLED],
+  PREPARED:   [TransferStatus.IN_TRANSIT, TransferStatus.CANCELLED],
   IN_TRANSIT: [TransferStatus.RECEIVED,   TransferStatus.CANCELLED],
   RECEIVED:   [],
   CANCELLED:  [],

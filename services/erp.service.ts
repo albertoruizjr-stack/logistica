@@ -1,9 +1,9 @@
 // ──────────────────────────────────────────────
-// SERVIÇO DE INTEGRAÇÃO COM ERP
-// Responsável por consultar notas fiscais, pedidos
-// e estoque via API externa do ERP.
-// Quando a API não estiver configurada, retorna dados
-// mockados para desenvolvimento.
+// SERVIÇO DE INTEGRAÇÃO COM ERP LEGADO
+// Consulta notas fiscais e pedidos via API externa.
+// Quando não configurado retorna null — sem mocks.
+// Pedidos de venda (PD) devem ser consultados via
+// citel.service.ts (fetchPedidoCabecalho/Itens).
 // ──────────────────────────────────────────────
 
 import type { ERPInvoice, ERPOrder, ERPStockByStore } from "@/types";
@@ -29,10 +29,7 @@ export async function fetchInvoiceFromERP(
 ): Promise<ERPInvoice | null> {
   const config = getConfig();
 
-  // sem configuração → retorna mock para desenvolvimento
-  if (!config) {
-    return getMockInvoice(invoiceNumber);
-  }
+  if (!config) return null;
 
   try {
     const response = await fetch(
@@ -69,9 +66,7 @@ export async function fetchOrderFromERP(
 ): Promise<ERPOrder | null> {
   const config = getConfig();
 
-  if (!config) {
-    return getMockOrder(orderNumber, storeCode);
-  }
+  if (!config) return null;
 
   try {
     const response = await fetch(
@@ -106,9 +101,7 @@ export async function fetchStockByProduct(
 ): Promise<ERPStockByStore | null> {
   const config = getConfig();
 
-  if (!config) {
-    return getMockStock(productCode);
-  }
+  if (!config) return null;
 
   try {
     const response = await fetch(
@@ -153,84 +146,3 @@ export async function fetchStockForItems(
   }));
 }
 
-// ──────────────────────────────────────────────
-// MOCKS DE DESENVOLVIMENTO
-// ──────────────────────────────────────────────
-
-function getMockInvoice(invoiceNumber: string): ERPInvoice {
-  return {
-    invoiceNumber,
-    storeCode: "067",
-    seller: { id: "seller-mock", name: "Vendedor Teste" },
-    customer: {
-      id: "customer-mock",
-      name: "João Silva — Pintor",
-      phone: "(11) 99999-1234",
-      document: "123.456.789-00",
-    },
-    deliveryAddress: {
-      street: "Rua das Flores, 123 — Vila Mariana",
-      complement: "Ap 45",
-      city: "São Paulo",
-      state: "SP",
-      zipCode: "04110-000",
-    },
-    items: [
-      {
-        productCode: "CORAL-TEC-18L",
-        productName: "Coral Tinta Acrílica Fosca 18L Branco",
-        quantity: 4,
-        unit: "GL",
-      },
-      {
-        productCode: "CORAL-PRIMER-3.6L",
-        productName: "Coral Primer Selador Acrílico 3,6L",
-        quantity: 2,
-        unit: "GL",
-      },
-    ],
-    totalValue: 856.0,
-    issuedAt: new Date().toISOString(),
-  };
-}
-
-function getMockOrder(orderNumber: string, storeCode: string): ERPOrder | null {
-  // simula pedido não encontrado para números que terminam em "000"
-  if (orderNumber.endsWith("000")) return null;
-  return {
-    orderNumber,
-    storeCode,
-    customer: {
-      id: "customer-mock",
-      name: "João Silva — Pintor",
-      phone: "(11) 99999-1234",
-      document: "123.456.789-00",
-    },
-    deliveryAddress: {
-      street: "Rua das Flores, 123 — Vila Mariana",
-      complement: "Ap 45",
-      city: "São Paulo",
-      state: "SP",
-      zipCode: "04110-000",
-    },
-    items: [
-      { productCode: "CORAL-TEC-18L", productName: "Coral Acrílica Fosca 18L Branco", quantity: 4, unit: "GL" },
-      { productCode: "CORAL-PRIMER-3.6L", productName: "Coral Primer Selador 3,6L", quantity: 2, unit: "GL" },
-    ],
-    totalValue: 856.0,
-  };
-}
-
-function getMockStock(productCode: string): ERPStockByStore {
-  const stores = ["067", "131", "132", "173", "191"];
-  return {
-    productCode,
-    productName: `Produto ${productCode}`,
-    availability: stores.map((code) => ({
-      storeCode: code,
-      storeName: `Loja ${code}`,
-      qty: Math.floor(Math.random() * 20),
-      available: Math.random() > 0.3,
-    })),
-  };
-}

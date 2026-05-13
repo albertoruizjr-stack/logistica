@@ -1,98 +1,59 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { getRouteDistance } from "@/lib/google-maps";
+import { geocodeAddress } from "@/lib/google-maps";
+
+vi.mock("@/services/maps/google-routes.provider", () => ({
+  geocodeAddressSP: vi.fn(),
+}));
+vi.mock("@/lib/route-cache", () => ({
+  getCachedGeocoding:  vi.fn().mockResolvedValue(null),
+  saveCachedGeocoding: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("@/services/maps/usage-logger", () => ({
+  logMapsUsage: vi.fn(),
+}));
+vi.mock("@/services/maps/quota-guard", () => ({
+  checkMapsQuota: vi.fn().mockResolvedValue({ allowed: true, count: 0, limit: 500, nearLimit: false }),
+}));
+
+// Importações dos módulos mockados — acessadas via vi.mocked()
+import { geocodeAddressSP }  from "@/services/maps/google-routes.provider";
+import { getCachedGeocoding } from "@/lib/route-cache";
 
 global.fetch = vi.fn();
 const mockFetch = vi.mocked(global.fetch);
 
-describe("getRouteDistance", () => {
+describe("geocodeAddress", () => {
   beforeEach(() => {
     process.env.GOOGLE_MAPS_API_KEY = "test-key-123";
+    vi.clearAllMocks();
+    vi.mocked(getCachedGeocoding).mockResolvedValue(null);
   });
 
   afterEach(() => {
     delete process.env.GOOGLE_MAPS_API_KEY;
-    vi.clearAllMocks();
   });
 
-  it("retorna null sem chamar fetch quando API_KEY está ausente", async () => {
-    delete process.env.GOOGLE_MAPS_API_KEY;
-    const result = await getRouteDistance(-23.5501, -46.6333, -23.5435, -46.629);
-    expect(result).toBeNull();
-    expect(mockFetch).not.toHaveBeenCalled();
-  });
+  it("retorna resultado estruturado do Google quando disponível", async () => {
+    const mockResult = {
+      formattedAddress: "Rua X, 123, São Paulo - SP, 01310-100",
+      street: "Rua X", streetNumber: "123", neighborhood: "Centro",
+      city: "São Paulo", state: "SP", postalCode: "01310-100",
+      lat: -23.55, lng: -46.63, placeId: "abc123", withinSP: true,
+    };
+    vi.mocked(geocodeAddressSP).mockResolvedValue(mockResult);
 
-  it("retorna distância e duração quando API responde OK", async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        rows: [
-          {
-            elements: [
-              {
-                status: "OK",
-                distance: { value: 3540 }, // 3.54 km
-                duration: { value: 840 },  // 14 min
-              },
-            ],
-          },
-        ],
-      }),
-    } as Response);
-
-    const result = await getRouteDistance(-23.5501, -46.6333, -23.5435, -46.629);
-
+    const result = await geocodeAddress("Rua X, 123, São Paulo - SP");
     expect(result).not.toBeNull();
-    expect(result!.distanceKm).toBeCloseTo(3.54, 2);
-    expect(result!.durationMin).toBeCloseTo(14, 0);
+    expect(result!.city).toBe("São Paulo");
+    expect(result!.withinSP).toBe(true);
+    expect(result!.state).toBe("SP");
   });
 
-  it("retorna null quando elemento tem status diferente de OK", async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        rows: [{ elements: [{ status: "ZERO_RESULTS" }] }],
-      }),
-    } as Response);
+  it("retorna null quando Google e Nominatim falham", async () => {
+    vi.mocked(geocodeAddressSP).mockResolvedValue(null);
+    mockFetch.mockRejectedValue(new Error("Network error"));
 
-    const result = await getRouteDistance(-23.5501, -46.6333, -23.5435, -46.629);
+    const result = await geocodeAddress("endereço inválido, RJ");
     expect(result).toBeNull();
-  });
-
-  it("retorna null quando HTTP status não é 200", async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: false,
-      status: 403,
-    } as Response);
-
-    const result = await getRouteDistance(-23.5501, -46.6333, -23.5435, -46.629);
-    expect(result).toBeNull();
-  });
-
-  it("retorna null quando fetch lança exceção de rede", async () => {
-    mockFetch.mockRejectedValueOnce(new Error("Network error"));
-    const result = await getRouteDistance(-23.5501, -46.6333, -23.5435, -46.629);
-    expect(result).toBeNull();
-  });
-
-  it("constrói URL com os parâmetros corretos", async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        rows: [
-          {
-            elements: [
-              { status: "OK", distance: { value: 1000 }, duration: { value: 120 } },
-            ],
-          },
-        ],
-      }),
-    } as Response);
-
-    await getRouteDistance(-23.5501, -46.6333, -23.5435, -46.629);
-
-    const calledUrl = mockFetch.mock.calls[0][0] as string;
-    expect(calledUrl).toContain("origins=-23.5501%2C-46.6333");
-    expect(calledUrl).toContain("mode=driving");
-    expect(calledUrl).toContain("key=test-key-123");
   });
 });

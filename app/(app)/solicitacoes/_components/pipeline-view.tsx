@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { cn, formatRelativeTime } from "@/lib/utils";
 import { SeparacaoChecklistModal } from "./separacao-checklist-modal";
+import { SolicitacaoDetailDrawer } from "./solicitacao-detail-drawer";
 
 // ─── Tipos ────────────────────────────────────────────────
 
@@ -19,6 +20,8 @@ export interface SolicitacaoCardData {
   orderStoreCode: string | null;
   invoiceNumber: string | null;
   nfLinkError: string | null;
+  erpAlertCount: number;
+  erpAlertSeverity: string | null; // CRITICAL | WARNING | INFO | null
   status: string;
   deliveryType: string;
   scheduledFor: string | null;
@@ -110,10 +113,37 @@ const SECTION_CONFIG: Record<string, {
     label: "Aguardando Transferência",
     note: "Bloqueadas por itens de outras lojas",
   },
+  SEPARADO: {
+    label: "Separado",
+    note: "Saiu do estoque — aguardando NF",
+  },
+  AGUARDANDO_NF: {
+    label: "Aguardando NF",
+    note: "Pedido separado, NF ainda não foi emitida",
+  },
+  NF_VINCULADA: {
+    label: "NF Emitida",
+    note: "NF saiu do Citel e foi vinculada — pronta para roteirização",
+  },
+  PRONTO_ROTEIRIZACAO: {
+    label: "Pronto p/ Roteirização",
+    note: "Aguardando ser incluído numa rota",
+  },
+  ROTEIRIZADO: {
+    label: "Roteirizado",
+    note: "Já está numa rota — aguardando despacho",
+  },
   READY: {
     label: "Pronto para Despacho",
     accentBorder: "border-blue-300",
     accentBg: "bg-blue-50",
+    hasSla: true,
+  },
+  OCORRENCIA: {
+    label: "Ocorrência",
+    note: "Anomalia na entrega — precisa de resolução",
+    accentBorder: "border-red-300",
+    accentBg: "bg-red-50",
     hasSla: true,
   },
   DISPATCHED: { label: "Despachado" },
@@ -127,9 +157,11 @@ const SECTION_CONFIG: Record<string, {
 function SolicitacaoCard({
   row,
   onConfirmSeparacao,
+  onOpenDetail,
 }: {
   row: SolicitacaoCardData;
   onConfirmSeparacao: (row: SolicitacaoCardData) => void;
+  onOpenDetail: (id: string) => void;
 }) {
   const priority = getPriority(row);
   const sla = getSla(row.createdAt, row.status);
@@ -237,22 +269,12 @@ function SolicitacaoCard({
           </button>
         );
       case "AWAITING_TRANSFER":
-        return row.activeTransferId ? (
-          <Link
-            href={`/transferencias/${row.activeTransferId}`}
-            className="text-[12px] font-semibold text-orange-600 hover:text-orange-700 whitespace-nowrap flex items-center gap-1"
-            onClick={(e) => e.stopPropagation()}
-          >
-            Ver transferência <ChevronRight className="w-3.5 h-3.5" />
-          </Link>
-        ) : (
-          <Link
-            href={`/transferencias?solicitacaoId=${row.id}`}
-            className="text-[12px] font-semibold text-orange-600 hover:text-orange-700 whitespace-nowrap flex items-center gap-1"
-            onClick={(e) => e.stopPropagation()}
-          >
-            Criar transferência <ChevronRight className="w-3.5 h-3.5" />
-          </Link>
+        // O Jhow confirma a transferência diretamente pelo drawer — não cria aqui.
+        // Por isso o botão "Criar transferência" foi removido; click no card abre o drawer.
+        return (
+          <span className="text-[12px] font-medium text-gray-500 whitespace-nowrap flex items-center gap-1">
+            Ver detalhes <ChevronRight className="w-3.5 h-3.5" />
+          </span>
         );
       case "READY":
         return (
@@ -289,10 +311,13 @@ function SolicitacaoCard({
   })();
 
   return (
-    <Link
-      href={`/solicitacoes/${row.id}`}
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => onOpenDetail(row.id)}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpenDetail(row.id); } }}
       className={cn(
-        "flex items-center gap-4 px-4 py-3.5 transition-colors border-b last:border-0",
+        "flex items-center gap-4 px-4 py-3.5 transition-colors border-b last:border-0 cursor-pointer",
         isCriticalReady || hasNfCritical
           ? "bg-red-50 hover:bg-red-100 border-l-4 border-l-red-400 pl-3"
           : hasNfWarning
@@ -402,6 +427,25 @@ function SolicitacaoCard({
                 );
             }
           })()}
+          {row.erpAlertCount > 0 && (() => {
+            const isCrit = row.erpAlertSeverity === "CRITICAL";
+            return (
+              <span
+                className="text-[10px] font-bold px-1.5 py-0.5 rounded flex-shrink-0 flex items-center gap-1"
+                style={isCrit
+                  ? { backgroundColor: "rgba(220,38,38,0.13)", color: "#B91C1C" }
+                  : { backgroundColor: "rgba(217,119,6,0.13)", color: "#92400E" }
+                }
+                title={isCrit
+                  ? "Alerta crítico do ERP — pedido pode ter sido cancelado ou alterado"
+                  : "Divergência no ERP — item ou endereço alterado após criação"
+                }
+              >
+                <AlertTriangle className="w-2.5 h-2.5" />
+                {isCrit ? `ERP CRÍTICO (${row.erpAlertCount})` : `ERP ${row.erpAlertCount} alerta${row.erpAlertCount > 1 ? "s" : ""}`}
+              </span>
+            );
+          })()}
           <span className="text-[12px] text-gray-400">·</span>
           <span
             className={cn("text-[11px]", SLA_STYLES[sla])}
@@ -423,7 +467,7 @@ function SolicitacaoCard({
 
       {/* Ação */}
       <div className="flex-shrink-0">{actionButton}</div>
-    </Link>
+    </div>
   );
 }
 
@@ -433,11 +477,13 @@ function PipelineSection({
   status,
   rows,
   onConfirmSeparacao,
+  onOpenDetail,
   defaultOpen = true,
 }: {
   status: string;
   rows: SolicitacaoCardData[];
   onConfirmSeparacao: (row: SolicitacaoCardData) => void;
+  onOpenDetail: (id: string) => void;
   defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -493,6 +539,7 @@ function PipelineSection({
               key={row.id}
               row={row}
               onConfirmSeparacao={onConfirmSeparacao}
+              onOpenDetail={onOpenDetail}
             />
           ))}
         </div>
@@ -509,7 +556,8 @@ interface PipelineViewProps {
 }
 
 export function PipelineView({ rows, sections }: PipelineViewProps) {
-  const [checklistTarget, setChecklistTarget] = useState<SolicitacaoCardData | null>(null);
+  const [checklistTarget,   setChecklistTarget]   = useState<SolicitacaoCardData | null>(null);
+  const [detailRequestId,   setDetailRequestId]   = useState<string | null>(null);
 
   // agrupa por status
   const grouped = new Map<string, SolicitacaoCardData[]>();
@@ -540,6 +588,7 @@ export function PipelineView({ rows, sections }: PipelineViewProps) {
             status={status}
             rows={grouped.get(status) ?? []}
             onConfirmSeparacao={setChecklistTarget}
+            onOpenDetail={setDetailRequestId}
             defaultOpen={["AWAITING_ITEMS", "PENDING", "READY"].includes(status)}
           />
         ))}
@@ -559,6 +608,11 @@ export function PipelineView({ rows, sections }: PipelineViewProps) {
           onClose={() => setChecklistTarget(null)}
         />
       )}
+
+      <SolicitacaoDetailDrawer
+        requestId={detailRequestId}
+        onClose={() => setDetailRequestId(null)}
+      />
     </>
   );
 }

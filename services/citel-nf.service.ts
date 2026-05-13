@@ -3,9 +3,15 @@
 //
 // Usa Basic Auth (CITEL_LOGIN:CITEL_SENHA) — não precisa de JWT.
 // codigoEmpresa = store.code (ex: "067", "132") — mapeamento 1:1.
+// Endpoint canônico: GET /consultapedidovenda/{numPad}/PD/{empresa}
+// Número do PD precisa de zero-padding (12 dígitos).
 // ──────────────────────────────────────────────
 
-const BASE_URL   = process.env.CITEL_API_URL   ?? "";
+import { normalizeCitelDocumentNumber } from "./citel.service";
+
+// O endpoint /consultapedidovenda fica em CITEL_PD_URL (porta 25049),
+// não em CITEL_API_URL. Mantemos compat com PD_URL antigo.
+const PD_URL      = process.env.CITEL_PD_URL    ?? process.env.CITEL_API_URL ?? "";
 const CITEL_LOGIN = process.env.CITEL_LOGIN     ?? "";
 const CITEL_SENHA = process.env.CITEL_SENHA     ?? "";
 
@@ -15,7 +21,7 @@ function basicAuthHeader(): string {
 }
 
 function isConfigured(): boolean {
-  return Boolean(BASE_URL && CITEL_LOGIN && CITEL_SENHA);
+  return Boolean(PD_URL && CITEL_LOGIN && CITEL_SENHA);
 }
 
 // ──────────────────────────────────────────────
@@ -50,7 +56,12 @@ export interface PedidoFaturadoBatch {
 
 // ──────────────────────────────────────────────
 // CONSULTA INDIVIDUAL — um PD específico
-// GET /pedidovenda/{numero}/PD/{empresa}
+// GET /consultapedidovenda/{numPad}/PD/{empresa}
+//
+// O Autcom armazena documentos com zeros à esquerda (12 dígitos).
+// Sem padding o servidor responde {cancelado:true, pedido:null} (bug do servidor),
+// que NÃO é cancelamento real — apenas "não encontrei". Tentamos os candidatos
+// gerados por normalizeCitelDocumentNumber().
 // ──────────────────────────────────────────────
 
 export async function fetchPedidoFaturamento(
@@ -59,29 +70,37 @@ export async function fetchPedidoFaturamento(
 ): Promise<CitelPedidoFaturamento | null> {
   if (!isConfigured()) return getMockPedido(orderNumber, storeCode);
 
-  try {
-    const url = `${BASE_URL}/pedidovenda/${encodeURIComponent(orderNumber)}/PD/${encodeURIComponent(storeCode)}`;
-    const res  = await fetch(url, {
-      headers: { Authorization: basicAuthHeader() },
-      signal:  AbortSignal.timeout(8000),
-    });
+  const candidates  = normalizeCitelDocumentNumber(orderNumber);
+  const storePadded = String(storeCode).replace(/\D/g, "").padStart(3, "0");
 
-    if (res.status === 404) return null;
-    if (!res.ok) {
-      console.error(`[CitelNF] HTTP ${res.status} para PD ${orderNumber} empresa ${storeCode}`);
-      return null;
+  for (const candidate of candidates) {
+    const url = `${PD_URL}/consultapedidovenda/${encodeURIComponent(candidate)}/PD/${encodeURIComponent(storePadded)}`;
+    try {
+      const res = await fetch(url, {
+        headers: { Authorization: basicAuthHeader() },
+        signal:  AbortSignal.timeout(10000),
+      });
+      if (res.status === 404) continue;
+      if (!res.ok) {
+        console.warn(`[CitelNF] HTTP ${res.status} candidate=${candidate} store=${storePadded}`);
+        continue;
+      }
+      const body = await res.json();
+      // {cancelado:true, pedido:null, dadosCancelamento:null} → bug do padding
+      const pedido            = body?.pedido;
+      const dadosCancelamento = body?.dadosCancelamento;
+      const realmenteCancelado = body?.cancelado === true && dadosCancelamento != null;
+
+      if (pedido) return parsePedido(pedido as Record<string, unknown>, realmenteCancelado);
+      if (realmenteCancelado) return parsePedido({ numeroDocumento: candidate, codigoEmpresa: storePadded }, true);
+      // tenta próximo candidato
+    } catch (err) {
+      console.warn(`[CitelNF] erro candidate=${candidate}:`, err instanceof Error ? err.message : err);
     }
-
-    const body = await res.json();
-    // ConsultaPedido: { cancelado, pedido } ou diretamente o pedido
-    const pedido = body?.pedido ?? body;
-    if (!pedido) return null;
-
-    return parsePedido(pedido, body?.cancelado ?? false);
-  } catch (err) {
-    console.error(`[CitelNF] Erro ao buscar PD ${orderNumber}/${storeCode}:`, err);
-    return null;
   }
+
+  console.log(`[CitelNF] NOT_FOUND order=${orderNumber} store=${storeCode}`);
+  return null;
 }
 
 // ──────────────────────────────────────────────
@@ -102,7 +121,7 @@ export async function fetchPedidosFaturadosBatch(
 
   try {
     while (true) {
-      const url = `${BASE_URL}/consultapedidovenda?codigoEmpresa=${encodeURIComponent(storeCode)}&data-hora=${encodeURIComponent(dataHora)}&ja-faturado=true&page=${page}&size=${size}`;
+      const url = `${PD_URL}/consultapedidovenda?codigoEmpresa=${encodeURIComponent(storeCode)}&data-hora=${encodeURIComponent(dataHora)}&ja-faturado=true&page=${page}&size=${size}`;
       const res  = await fetch(url, {
         headers: { Authorization: basicAuthHeader() },
         signal:  AbortSignal.timeout(15000),

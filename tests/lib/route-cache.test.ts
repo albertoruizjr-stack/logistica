@@ -1,93 +1,46 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
-import { buildCacheKey, getTimeBucket, computeTTLDays } from "@/lib/route-cache";
+import { describe, it, expect } from "vitest";
+import { buildRouteCacheKey, buildGeocodingCacheKey } from "@/lib/route-cache";
 
-afterEach(() => {
-  vi.useRealTimers();
-});
-
-// ──────────────────────────────────────────────
-// buildCacheKey
-// ──────────────────────────────────────────────
-
-describe("buildCacheKey", () => {
+describe("buildRouteCacheKey", () => {
   it("arredonda coordenadas para 4 casas decimais", () => {
-    const key = buildCacheKey(
-      -23.55012345,
-      -46.63334567,
-      -23.54350001,
-      -46.62900099,
-      "MORNING"
-    );
-    expect(key).toBe("-23.5501_-46.6333_-23.5435_-46.6290_MORNING");
+    const key = buildRouteCacheKey(-23.55012345, -46.63334567, -23.54350001, -46.62900099);
+    expect(key).toBe("-23.5501_-46.6333_-23.5435_-46.6290");
   });
 
   it("origem e destino são posicionalmente distintos", () => {
-    const keyAB = buildCacheKey(-23.5501, -46.6333, -23.5435, -46.629, "AFTERNOON");
-    const keyBA = buildCacheKey(-23.5435, -46.629, -23.5501, -46.6333, "AFTERNOON");
+    const keyAB = buildRouteCacheKey(-23.5501, -46.6333, -23.5435, -46.629);
+    const keyBA = buildRouteCacheKey(-23.5435, -46.629, -23.5501, -46.6333);
     expect(keyAB).not.toBe(keyBA);
   });
 
-  it("mesmo par de coordenadas com timeBuckets diferentes gera chaves distintas", () => {
-    const morning = buildCacheKey(-23.5501, -46.6333, -23.5435, -46.629, "MORNING");
-    const evening = buildCacheKey(-23.5501, -46.6333, -23.5435, -46.629, "EVENING");
-    expect(morning).not.toBe(evening);
-  });
-
-  it("diferenças na 5ª casa decimal (≤4) resultam na mesma chave de 4dp", () => {
-    // -23.55011 e -23.55014 ambos arredondam para -23.5501 (5ª casa ≤ 4 → sem carry)
-    const key1 = buildCacheKey(-23.55011, -46.6333, -23.5435, -46.629, "AFTERNOON");
-    const key2 = buildCacheKey(-23.55014, -46.6333, -23.5435, -46.629, "AFTERNOON");
+  it("diferenças na 5ª casa decimal resultam na mesma chave", () => {
+    const key1 = buildRouteCacheKey(-23.55011, -46.6333, -23.5435, -46.629);
+    const key2 = buildRouteCacheKey(-23.55014, -46.6333, -23.5435, -46.629);
     expect(key1).toBe(key2);
   });
-});
 
-// ──────────────────────────────────────────────
-// getTimeBucket
-// ──────────────────────────────────────────────
-
-describe("getTimeBucket", () => {
-  it("retorna MORNING entre 6h e 11h59", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-04-17T09:30:00"));
-    expect(getTimeBucket()).toBe("MORNING");
-  });
-
-  it("retorna AFTERNOON entre 12h e 17h59", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-04-17T15:00:00"));
-    expect(getTimeBucket()).toBe("AFTERNOON");
-  });
-
-  it("retorna EVENING às 18h em diante", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-04-17T20:00:00"));
-    expect(getTimeBucket()).toBe("EVENING");
-  });
-
-  it("retorna EVENING antes das 6h (madrugada)", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-04-17T03:00:00"));
-    expect(getTimeBucket()).toBe("EVENING");
+  it("não inclui time bucket na chave", () => {
+    const key = buildRouteCacheKey(-23.5501, -46.6333, -23.5435, -46.629);
+    expect(key).not.toContain("MORNING");
+    expect(key).not.toContain("AFTERNOON");
+    expect(key).not.toContain("EVENING");
   });
 });
 
-// ──────────────────────────────────────────────
-// computeTTLDays
-// ──────────────────────────────────────────────
-
-describe("computeTTLDays", () => {
-  it("retorna 7 dias para distâncias até 5 km", () => {
-    expect(computeTTLDays(0.5)).toBe(7);
-    expect(computeTTLDays(5)).toBe(7);
+describe("buildGeocodingCacheKey", () => {
+  it("normaliza query em lowercase e trim", () => {
+    const k1 = buildGeocodingCacheKey("  Rua das Flores, 123  ");
+    const k2 = buildGeocodingCacheKey("rua das flores, 123");
+    expect(k1).toBe(k2);
   });
 
-  it("retorna 15 dias para distâncias entre 5 e 15 km", () => {
-    expect(computeTTLDays(5.1)).toBe(15);
-    expect(computeTTLDays(15)).toBe(15);
+  it("gera hash diferente para queries distintas", () => {
+    const k1 = buildGeocodingCacheKey("Rua A");
+    const k2 = buildGeocodingCacheKey("Rua B");
+    expect(k1).not.toBe(k2);
   });
 
-  it("retorna 30 dias para distâncias acima de 15 km", () => {
-    expect(computeTTLDays(15.1)).toBe(30);
-    expect(computeTTLDays(25)).toBe(30);
+  it("retorna string de 32 caracteres", () => {
+    expect(buildGeocodingCacheKey("Rua Qualquer")).toHaveLength(32);
   });
 });

@@ -1,148 +1,156 @@
 // lib/google-maps.ts
-// Cliente do Google Maps Platform (Distance Matrix + Geocoding).
-// Geocoding: Google Maps quando disponível → Nominatim (OpenStreetMap) como fallback gratuito.
-// Retorna null em qualquer falha — o orquestrador decide o fallback.
+// Geocodificação com viés para São Paulo + fallback Nominatim.
+// Usado internamente pelo endpoint /api/geocode.
+// A chave de API nunca é exposta ao frontend.
 
-const DISTANCE_MATRIX_URL =
-  "https://maps.googleapis.com/maps/api/distancematrix/json";
+import { geocodeAddressSP, type StructuredAddress } from "@/services/maps/google-routes.provider";
+import { getCachedGeocoding, saveCachedGeocoding }  from "@/lib/route-cache";
+import { logMapsUsage }                             from "@/services/maps/usage-logger";
+import { checkMapsQuota }                           from "@/services/maps/quota-guard";
 
-const GEOCODING_URL =
-  "https://maps.googleapis.com/maps/api/geocode/json";
+// re-exporta o tipo canônico de endereço
+export type { StructuredAddress };
 
-export interface RouteResult {
-  distanceKm: number;
-  durationMin: number;
+// ──────────────────────────────────────────────
+// VALIDAÇÃO DE QUALIDADE DE ENDEREÇO
+// Rejeita consultas genéricas demais antes de chamar a API.
+// Reduz chamadas improdutivas e protege a quota.
+// ──────────────────────────────────────────────
+
+export interface AddressQualityResult {
+  valid:   boolean;
+  reason?: string;
 }
 
-export async function getRouteDistance(
-  originLat: number,
-  originLng: number,
-  destLat: number,
-  destLng: number
-): Promise<RouteResult | null> {
-  const apiKey = process.env.GOOGLE_MAPS_API_KEY;
-  if (!apiKey) {
-    console.warn(
-      "[google-maps] GOOGLE_MAPS_API_KEY não configurada — fallback Haversine ativo"
-    );
-    return null;
+// Padrões que indicam endereço completo o suficiente:
+// CEP (8 dígitos), sigla de estado "- SP", "SP -", ou nome de cidade conhecida
+const CEP_RE       = /\b\d{5}-?\d{3}\b/;
+const STATE_CODE_RE = /\b[A-Z]{2}\b/;  // ex: SP, RJ, MG
+
+export function validateAddressQuality(address: string): AddressQualityResult {
+  const trimmed = address.trim();
+
+  if (trimmed.length < 8) {
+    return { valid: false, reason: "Endereço muito curto. Informe rua, número e cidade ou CEP." };
   }
 
-  const url = new URL(DISTANCE_MATRIX_URL);
-  url.searchParams.set("origins", `${originLat},${originLng}`);
-  url.searchParams.set("destinations", `${destLat},${destLng}`);
-  url.searchParams.set("mode", "driving");
-  url.searchParams.set("language", "pt-BR");
-  url.searchParams.set("units", "metric");
-  url.searchParams.set("key", apiKey);
+  // Aceita endereços com CEP — qualidade garantida
+  if (CEP_RE.test(trimmed)) return { valid: true };
 
-  try {
-    const response = await fetch(url.toString());
-
-    if (!response.ok) {
-      console.error(`[google-maps] HTTP ${response.status}`);
-      return null;
-    }
-
-    const data = await response.json();
-    const element = data?.rows?.[0]?.elements?.[0];
-
-    if (!element || element.status !== "OK") {
-      console.error(`[google-maps] status inesperado: ${element?.status}`);
-      return null;
-    }
-
+  // Precisa ter ao menos uma vírgula separando partes (rua, cidade ou rua, número)
+  const parts = trimmed.split(",").map((p) => p.trim()).filter(Boolean);
+  if (parts.length < 2) {
     return {
-      distanceKm: element.distance.value / 1000, // metros → km
-      durationMin: element.duration.value / 60,  // segundos → minutos
+      valid: false,
+      reason: "Informe o endereço completo: Rua, Número, Cidade — SP (ou use o CEP).",
     };
-  } catch (err) {
-    console.error("[google-maps] erro na chamada:", err);
-    return null;
   }
+
+  // Deve conter sigla de estado para evitar geocoding ambíguo (ex: "Rua das Flores" existe em 200 cidades)
+  if (!STATE_CODE_RE.test(trimmed)) {
+    return {
+      valid: false,
+      reason: "Inclua a cidade e estado (ex: São Paulo — SP) ou o CEP para garantir precisão.",
+    };
+  }
+
+  return { valid: true };
 }
 
 // ──────────────────────────────────────────────
-// GEOCODING API — endereço → lat/lng
+// GEOCODING PRINCIPAL — cache → Google → Nominatim
 // ──────────────────────────────────────────────
-
-export interface GeocodingResult {
-  lat: number;
-  lng: number;
-  formattedAddress: string;
-}
 
 export async function geocodeAddress(
   address: string
-): Promise<GeocodingResult | null> {
-  const apiKey = process.env.GOOGLE_MAPS_API_KEY;
-
-  if (apiKey) {
-    const result = await geocodeViaGoogleMaps(address, apiKey);
-    if (result) return result;
+): Promise<StructuredAddress | null> {
+  // 1. cache permanente — não consome quota
+  const cached = await getCachedGeocoding(address);
+  if (cached) {
+    logMapsUsage({ endpoint: "GEOCODE_CACHE_HIT", cacheHit: true });
+    return cached;
   }
 
-  // fallback gratuito via Nominatim (OpenStreetMap) — sem chave necessária
-  return geocodeViaNominatim(address);
-}
-
-async function geocodeViaGoogleMaps(
-  address: string,
-  apiKey: string
-): Promise<GeocodingResult | null> {
-  const url = new URL(GEOCODING_URL);
-  url.searchParams.set("address", address);
-  url.searchParams.set("region", "BR");
-  url.searchParams.set("language", "pt-BR");
-  url.searchParams.set("key", apiKey);
-
-  try {
-    const response = await fetch(url.toString());
-    if (!response.ok) return null;
-
-    const data = await response.json();
-    const result = data?.results?.[0];
-    if (!result || data.status !== "OK") return null;
-
-    return {
-      lat: result.geometry.location.lat,
-      lng: result.geometry.location.lng,
-      formattedAddress: result.formatted_address,
-    };
-  } catch {
-    return null;
+  // 2. quota guard — pula Google se limite diário atingido
+  const quota = await checkMapsQuota().catch(
+    (): { allowed: boolean; count: number; limit: number; nearLimit: boolean } =>
+      ({ allowed: true, count: 0, limit: 0, nearLimit: false })
+  );
+  if (!quota.allowed) {
+    logMapsUsage({ endpoint: "MAPS_QUOTA_EXCEEDED", cacheHit: false, success: false });
+    // Tenta Nominatim como fallback quando a quota estourou
+    return geocodeViaNominatim(address);
   }
+
+  if (quota.nearLimit) {
+    console.warn(`[google-maps] quota em ${quota.count}/${quota.limit} — próximo do limite`);
+  }
+
+  // 3. Google Geocoding API (SP biased)
+  const fromGoogle = await geocodeAddressSP(address);
+  if (fromGoogle) {
+    logMapsUsage({ endpoint: "GEOCODE", cacheHit: false, success: true });
+    saveCachedGeocoding(address, fromGoogle, "GOOGLE_GEOCODING").catch(() => {});
+    return fromGoogle;
+  }
+
+  // 4. Nominatim (OpenStreetMap) — fallback gratuito, rate-limited 1 req/s
+  const fromNominatim = await geocodeViaNominatim(address);
+  if (fromNominatim) {
+    logMapsUsage({ endpoint: "GEOCODE", cacheHit: false, success: true });
+    saveCachedGeocoding(address, fromNominatim, "NOMINATIM").catch(() => {});
+    return fromNominatim;
+  }
+
+  logMapsUsage({ endpoint: "GEOCODE", cacheHit: false, success: false, error: "NOT_FOUND" });
+  return null;
 }
 
-// Nominatim tem limite de 1 req/seg por política de uso — aceitável para uso interno
+// ──────────────────────────────────────────────
+// FALLBACK — Nominatim (OpenStreetMap)
+// ──────────────────────────────────────────────
+
 async function geocodeViaNominatim(
   address: string
-): Promise<GeocodingResult | null> {
+): Promise<StructuredAddress | null> {
   const url = new URL("https://nominatim.openstreetmap.org/search");
-  url.searchParams.set("q", `${address}, Brasil`);
-  url.searchParams.set("format", "json");
-  url.searchParams.set("limit", "1");
-  url.searchParams.set("countrycodes", "br");
+  url.searchParams.set("q",              `${address}, São Paulo, Brasil`);
+  url.searchParams.set("format",         "json");
+  url.searchParams.set("limit",          "1");
+  url.searchParams.set("countrycodes",   "br");
   url.searchParams.set("addressdetails", "1");
 
   try {
-    const response = await fetch(url.toString(), {
+    const res = await fetch(url.toString(), {
       headers: {
-        // Nominatim exige User-Agent identificável por política de uso
-        "User-Agent": "SistemaLogisticaMestreDaPintura/1.0 (interno)",
+        "User-Agent":      "SistemaLogisticaMestreDaPintura/1.0 (interno)",
         "Accept-Language": "pt-BR,pt",
       },
+      signal: AbortSignal.timeout(6_000),
     });
-    if (!response.ok) return null;
+    if (!res.ok) return null;
 
-    const data = await response.json();
+    const data   = await res.json();
     const result = data?.[0];
     if (!result) return null;
 
+    const addr = result.address ?? {};
+    const state =
+      addr.state_code?.replace("BR-", "") ??
+      (addr.state === "São Paulo" ? "SP" : "");
+
     return {
-      lat: parseFloat(result.lat),
-      lng: parseFloat(result.lon),
       formattedAddress: result.display_name,
+      street:           addr.road ?? null,
+      streetNumber:     addr.house_number ?? null,
+      neighborhood:     addr.suburb ?? addr.neighbourhood ?? null,
+      city:             addr.city ?? addr.town ?? addr.municipality ?? "",
+      state,
+      postalCode:       addr.postcode ?? null,
+      lat:              parseFloat(result.lat),
+      lng:              parseFloat(result.lon),
+      placeId:          null,
+      withinSP:         state === "SP",
     };
   } catch {
     return null;

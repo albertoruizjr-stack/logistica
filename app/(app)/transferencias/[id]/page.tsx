@@ -27,6 +27,7 @@ const TIMELINE_CONFIG: Record<TransferStatus, {
   PENDING:   { icon: Clock,         bgColor: "bg-yellow-50",  borderColor: "border-yellow-200", iconColor: "text-yellow-600" },
   APPROVED:  { icon: CheckCircle2,  bgColor: "bg-blue-50",    borderColor: "border-blue-200",   iconColor: "text-blue-600" },
   PREPARING: { icon: Box,           bgColor: "bg-purple-50",  borderColor: "border-purple-200", iconColor: "text-purple-600" },
+  PREPARED:  { icon: CheckCircle2,  bgColor: "bg-teal-50",    borderColor: "border-teal-200",   iconColor: "text-teal-600" },
   IN_TRANSIT:{ icon: Truck,         bgColor: "bg-orange-50",  borderColor: "border-orange-200", iconColor: "text-orange-600" },
   RECEIVED:  { icon: CheckCircle2,  bgColor: "bg-green-50",   borderColor: "border-green-200",  iconColor: "text-green-600" },
   CANCELLED: { icon: XCircle,       bgColor: "bg-gray-50",    borderColor: "border-gray-200",   iconColor: "text-gray-500" },
@@ -40,7 +41,7 @@ export default async function TransferenciaDetalhePage({
   const session = await getSession();
   if (!session) redirect("/login");
 
-  if (!["ADMIN", "OPERATOR"].includes(session.role)) {
+  if (!["ADMIN", "OPERATOR", "STOCK_OPERATOR", "LOGISTICS_OPERATOR", "STORE_LEADER", "SELLER"].includes(session.role)) {
     redirect("/dashboard");
   }
 
@@ -210,6 +211,7 @@ export default async function TransferenciaDetalhePage({
                         TransferStatus.PENDING,
                         TransferStatus.APPROVED,
                         TransferStatus.PREPARING,
+                        TransferStatus.PREPARED,
                         TransferStatus.IN_TRANSIT,
                         TransferStatus.RECEIVED,
                       ];

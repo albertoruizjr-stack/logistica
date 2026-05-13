@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Plus, ChevronDown } from "lucide-react";
+import { NotificationBell } from "./notification-bell";
 
 const PAGE_TITLES: Record<string, string> = {
   "/solicitacoes": "Solicitações",
@@ -14,7 +15,7 @@ const PAGE_TITLES: Record<string, string> = {
   "/auditoria": "Auditoria & KPIs",
 };
 
-const CAN_CREATE_DELIVERY = ["ADMIN", "OPERATOR", "SELLER"];
+const CAN_CREATE_DELIVERY = ["ADMIN", "OPERATOR", "STOCK_OPERATOR", "LOGISTICS_OPERATOR", "STORE_LEADER", "SELLER"];
 
 interface HeaderProps {
   userRole: string;
@@ -74,6 +75,7 @@ export function Header({ userRole, userName, storeName, storeCode }: HeaderProps
             Nova Solicitação
           </Link>
         )}
+        <NotificationBell />
         <button
           className="flex items-center gap-1.5 transition-opacity hover:opacity-70"
         >
