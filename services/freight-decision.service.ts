@@ -236,31 +236,37 @@ export function decideBestDeliveryOption(p: DecisionParams): ModalDecisionResult
 
 // ──────────────────────────────────────────────
 // PASSO 8 — PREÇO SUGERIDO AO CLIENTE
-// MAX(zona, custo_real × margem) + sobretaxa de urgência
+// Tabela zonal fechada — `basePrice` normal ou `expressBasePrice` se URGENT.
+// `expressBasePrice` é valor TOTAL do express (não multiplicador) — definido por zona em
+// migration_fase1_tabela_e_organograma.sql. Quando ausente, cai pro urgentFactor legado.
 // ──────────────────────────────────────────────
 
 export function calculateCustomerPrice(params: {
-  zone:             { basePrice: number } | null;
-  internalCost:     number;
-  lalamoveCost:     number | null;
-  selectedMode:     "INTERNAL" | "LALAMOVE";
-  internalVehicle:  InternalVehicleType | "EXCEPTION";
+  zone:             { basePrice: number; expressBasePrice?: number | null; urgentFactor?: number } | null;
+  // params abaixo mantidos por compat na assinatura — não influenciam mais o preço.
+  // Decisão de modal (INTERNAL × LALAMOVE) é separada e segue em decideBestDeliveryOption.
+  internalCost?:     number;
+  lalamoveCost?:     number | null;
+  selectedMode?:     "INTERNAL" | "LALAMOVE";
+  internalVehicle?:  InternalVehicleType | "EXCEPTION";
   isUrgent:         boolean;
-  urgencySurcharge: number;
+  urgencySurcharge?: number;
 }): number {
-  const { zone, internalCost, lalamoveCost, selectedMode, internalVehicle, isUrgent, urgencySurcharge } = params;
+  const { zone, isUrgent, urgencySurcharge } = params;
 
-  let basePrice: number;
+  if (!zone) return 0;
 
-  if (selectedMode === "INTERNAL" && internalVehicle !== "EXCEPTION") {
-    const margin = INTERNAL_VEHICLE_MARGINS[internalVehicle] ?? 1.3;
-    basePrice = Math.max(zone?.basePrice ?? 0, internalCost * margin);
-  } else {
-    const lalamoveBase = lalamoveCost != null ? lalamoveCost * LALAMOVE_PRICE_MARGIN : 0;
-    basePrice = Math.max(zone?.basePrice ?? 0, lalamoveBase);
+  if (isUrgent) {
+    // Quando a zona tem express explícito, usa o valor absoluto (R$ definido na tabela).
+    if (zone.expressBasePrice != null && zone.expressBasePrice > 0) {
+      return zone.expressBasePrice;
+    }
+    // Fallback p/ zonas legadas sem expressBasePrice: aplica urgentFactor ou urgencySurcharge.
+    const factor = zone.urgentFactor ?? urgencySurcharge ?? 1.3;
+    return zone.basePrice * factor;
   }
 
-  return isUrgent ? basePrice * urgencySurcharge : basePrice;
+  return zone.basePrice;
 }
 
 // ──────────────────────────────────────────────

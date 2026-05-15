@@ -313,81 +313,47 @@ describe("decideBestDeliveryOption", () => {
   });
 });
 
-describe("calculateCustomerPrice", () => {
-  const zone = { basePrice: 25 };
+describe("calculateCustomerPrice (Fase 2 — tabela zonal fechada)", () => {
+  // Zona com express explícito (formato novo migration_fase1)
+  const zoneNova = { basePrice: 22, expressBasePrice: 35 };
+  // Zona legada sem express (cai pra urgentFactor)
+  const zoneLegada = { basePrice: 25, urgentFactor: 1.8 };
 
-  it("interno FIORINO: MAX(zona=25, custo 20 × 1.4=28) → 28", () => {
-    const price = calculateCustomerPrice({
-      zone,
-      internalCost:    20,
-      lalamoveCost:    40,
-      selectedMode:    "INTERNAL",
-      internalVehicle: InternalVehicleType.FIORINO,
-      isUrgent:        false,
-      urgencySurcharge: 1.3,
-    });
-    expect(price).toBeCloseTo(28, 2);
+  it("normal → retorna basePrice direto", () => {
+    expect(calculateCustomerPrice({ zone: zoneNova, isUrgent: false })).toBe(22);
   });
 
-  it("interno MOTO: MAX(zona=25, custo 10 × 1.8=18) → usa zona (25)", () => {
-    const price = calculateCustomerPrice({
-      zone,
-      internalCost:    10,
-      lalamoveCost:    null,
-      selectedMode:    "INTERNAL",
-      internalVehicle: InternalVehicleType.MOTO,
-      isUrgent:        false,
-      urgencySurcharge: 1.3,
-    });
-    expect(price).toBeCloseTo(25, 2);
+  it("urgente com expressBasePrice → retorna express absoluto", () => {
+    expect(calculateCustomerPrice({ zone: zoneNova, isUrgent: true })).toBe(35);
   });
 
-  it("Lalamove: MAX(zona=25, custo 30 × 1.15=34.5) → 34.5", () => {
-    const price = calculateCustomerPrice({
-      zone,
-      internalCost:    20,
-      lalamoveCost:    30,
-      selectedMode:    "LALAMOVE",
-      internalVehicle: InternalVehicleType.FIORINO,
-      isUrgent:        false,
-      urgencySurcharge: 1.3,
-    });
-    expect(price).toBeCloseTo(34.5, 2);
+  it("urgente sem expressBasePrice → aplica urgentFactor legado", () => {
+    // 25 × 1.8 = 45
+    expect(calculateCustomerPrice({ zone: zoneLegada, isUrgent: true })).toBeCloseTo(45, 2);
   });
 
-  it("urgente aplica sobretaxa de 1.3×", () => {
-    const normal = calculateCustomerPrice({
-      zone,
-      internalCost:    20,
-      lalamoveCost:    null,
-      selectedMode:    "INTERNAL",
-      internalVehicle: InternalVehicleType.FIORINO,
-      isUrgent:        false,
-      urgencySurcharge: 1.3,
-    });
-    const urgent = calculateCustomerPrice({
-      zone,
-      internalCost:    20,
-      lalamoveCost:    null,
-      selectedMode:    "INTERNAL",
-      internalVehicle: InternalVehicleType.FIORINO,
-      isUrgent:        true,
-      urgencySurcharge: 1.3,
-    });
-    expect(urgent).toBeCloseTo(normal * 1.3, 2);
+  it("urgente sem urgentFactor nem expressBasePrice → fallback urgencySurcharge", () => {
+    const zoneSemFactor = { basePrice: 20 };
+    expect(calculateCustomerPrice({
+      zone: zoneSemFactor, isUrgent: true, urgencySurcharge: 1.3,
+    })).toBeCloseTo(26, 2);
   });
 
-  it("zona null → usa apenas custo × margem", () => {
-    const price = calculateCustomerPrice({
-      zone: null,
-      internalCost:    20,
-      lalamoveCost:    null,
-      selectedMode:    "INTERNAL",
-      internalVehicle: InternalVehicleType.FIORINO,
-      isUrgent:        false,
-      urgencySurcharge: 1.3,
-    });
-    expect(price).toBeCloseTo(28, 2); // 20 × 1.4
+  it("zona null → retorna 0 (sob consulta)", () => {
+    expect(calculateCustomerPrice({ zone: null, isUrgent: false })).toBe(0);
+  });
+
+  it("compat: params antigos (internalCost, lalamoveCost, etc.) são ignorados", () => {
+    // Garante que código existente que passa esses params não quebra
+    expect(calculateCustomerPrice({
+      zone: zoneNova,
+      isUrgent: false,
+      internalCost: 999,            // ignorado
+      lalamoveCost: 999,            // ignorado
+      selectedMode: "INTERNAL",     // ignorado
+      internalVehicle: InternalVehicleType.FIORINO, // ignorado
+      urgencySurcharge: 99,         // ignorado quando há expressBasePrice
+    })).toBe(22);
   });
 });
 
