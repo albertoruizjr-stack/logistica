@@ -293,15 +293,16 @@ model Store {
 // ──────────────────────────────────────────────
 
 model User {
-  id        String   @id @default(cuid())
-  name      String
-  email     String   @unique
-  password  String
-  role      Role
-  storeId   String
-  active    Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id            String   @id @default(cuid())
+  name          String
+  email         String   @unique
+  password      String
+  role          Role
+  storeId       String
+  citelUserCode String?  @unique     // código operador no Autcom/Citel (ex: "003", "027")
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   store             Store             @relation(fields: [storeId], references: [id])
   deliveryRequests  DeliveryRequest[]
@@ -348,16 +349,17 @@ model Notification {
 // ──────────────────────────────────────────────
 
 model FreightZone {
-  id            String  @id @default(cuid())
-  name          String  // Ex: "Zona 1 — até 3 km"
-  minKm         Float
-  maxKm         Float?  // null = sem limite superior (sob consulta)
-  basePrice     Float   // valor em R$
-  urgentFactor  Float   @default(1.8)  // multiplicador para urgente
-  underConsultation Boolean @default(false) // acima de 20km
-  active        Boolean @default(true)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id                String  @id @default(cuid())
+  name              String  // Ex: "Zona 1 — até 3 km"
+  minKm             Float
+  maxKm             Float?  // null = sem limite superior (sob consulta)
+  basePrice         Float   // valor normal em R$
+  expressBasePrice  Float?  // valor express em R$ (override de urgentFactor quando preenchido)
+  urgentFactor      Float   @default(1.8)  // legado — usado só quando expressBasePrice = null
+  underConsultation Boolean @default(false) // zona "sob consulta" (ex: >30km)
+  active            Boolean @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
   freightQuotes FreightQuote[]
 
@@ -428,7 +430,8 @@ model DeliveryRequest {
   invoiceNumber   String?               // NF — preenchida após emissão
   invoiceStoreId  String?               // loja emissora da NF (geralmente CD/132)
 
-  storeId         String                // loja que fez a solicitação
+  storeId         String                // loja que fez a solicitação (vendedor cobra zona daqui)
+  dispatchStoreId String?               // loja de despacho operacional (CD/132). null = legado, usa storeId
   sellerId        String
   // dados do destinatário (sempre preenchidos pelo vendedor)
   customerId      String?
