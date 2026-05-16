@@ -23,7 +23,8 @@ export type NotificationType =
   | "ERP_ALERT"                  // 12 alerta do watcher (PD alterado/cancelado)
   | "REQUEST_CANCELLED"          // 13 solicitação cancelada
   | "EXCEPTION_APPROVAL_NEEDED"  // 14 vendedor pediu exceção operacional
-  | "TRANSFER_CANCELLED";        // 15 loja origem cancelou a transferência (crítico — refazer)
+  | "TRANSFER_CANCELLED"         // 15 loja origem cancelou a transferência (crítico — refazer)
+  | "ACTION_REQUIRED";           // 16 ação pendente — "você é o responsável pela próxima etapa"
 
 interface NotificationTypeMeta {
   /** Ícone (nome de lucide-react) */
@@ -56,4 +57,5 @@ export const NOTIFICATION_META: Record<NotificationType, NotificationTypeMeta> =
   REQUEST_CANCELLED:       { icon: "XCircle",         color: "#737373", bg: "rgba(115,115,115,0.10)", severity: "info"    },
   EXCEPTION_APPROVAL_NEEDED:{ icon: "AlertTriangle",  color: "#D97706", bg: "rgba(217,119,6,0.10)",  severity: "warn"     },
   TRANSFER_CANCELLED:      { icon: "XCircle",         color: "#DC2626", bg: "rgba(220,38,38,0.10)",  severity: "critical" },
+  ACTION_REQUIRED:         { icon: "Bell",            color: "#F97316", bg: "rgba(249,115,22,0.10)", severity: "warn"     },
 };

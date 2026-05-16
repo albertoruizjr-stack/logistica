@@ -501,7 +501,7 @@ async function _applyTransition(
 export async function transitionDeliveryRequest(
   ctx: TransitionContext
 ): Promise<{ id: string; status: DeliveryRequestStatus }> {
-  return prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     const request = await tx.deliveryRequest.findUnique({
       where: { id: ctx.requestId },
       select: {
@@ -525,6 +525,22 @@ export async function transitionDeliveryRequest(
 
     return _applyTransition(tx, ctx.requestId, request.status, request, ctx);
   });
+
+  // Pós-commit: notifica o próximo responsável (best-effort, não bloqueia).
+  // Excluir o ator atual (quem acabou de fazer a ação não recebe notificação pra próxima).
+  void (async () => {
+    try {
+      const { notifyNextResponsible } = await import("@/services/notifications.service");
+      await notifyNextResponsible({
+        deliveryRequestId: ctx.requestId,
+        excludeUserId:     ctx.actorId !== "SYSTEM" ? ctx.actorId : undefined,
+      });
+    } catch (err) {
+      console.error("[state-machine] notifyNextResponsible falhou:", err instanceof Error ? err.message : err);
+    }
+  })();
+
+  return result;
 }
 
 // ──────────────────────────────────────────────

@@ -70,6 +70,33 @@ export async function findAdmins(): Promise<string[]> {
   return users.map(u => u.id);
 }
 
+/** Operadores de estoque ativos de uma loja específica. */
+export async function findStockOperatorsByStore(storeId: string): Promise<string[]> {
+  const users = await prisma.user.findMany({
+    where: { storeId, role: { in: [Role.STOCK_OPERATOR, Role.OPERATOR] }, active: true },
+    select: { id: true },
+  });
+  return users.map(u => u.id);
+}
+
+/** Operadores de logística ativos de uma loja específica. */
+export async function findLogisticsOperatorsByStore(storeId: string): Promise<string[]> {
+  const users = await prisma.user.findMany({
+    where: { storeId, role: { in: [Role.LOGISTICS_OPERATOR, Role.OPERATOR] }, active: true },
+    select: { id: true },
+  });
+  return users.map(u => u.id);
+}
+
+/** Líder de loja ativo (1 por loja). */
+export async function findStoreLeader(storeId: string): Promise<string[]> {
+  const users = await prisma.user.findMany({
+    where: { storeId, role: Role.STORE_LEADER, active: true },
+    select: { id: true },
+  });
+  return users.map(u => u.id);
+}
+
 /** O vendedor que criou determinada solicitação. */
 export async function findSellerOfRequest(deliveryRequestId: string): Promise<string[]> {
   const r = await prisma.deliveryRequest.findUnique({
@@ -338,5 +365,65 @@ export async function notifyExceptionApprovalNeeded(args: RequestRefs & { except
     body:  `${reqLabel(args)} · ${args.exceptionType}: ${args.reason.slice(0, 60)}`,
     link:  `/solicitacoes?detail=${args.deliveryRequestId}`,
     metadata: { deliveryRequestId: args.deliveryRequestId, exceptionType: args.exceptionType },
+  });
+}
+
+// #16 — Ação pendente: notifica o responsável pela próxima etapa
+// Disparado pela state machine sempre que uma solicitação entra num status que
+// requer ação. Resolve quem deve agir lendo a tabela responsavel.service.
+// Excluir actorId: se Jhow confirma separação, não faz sentido notificá-lo
+// dizendo "Jhow precisa solicitar NF" — quem precisa é a Jane.
+export async function notifyNextResponsible(args: {
+  deliveryRequestId: string;
+  excludeUserId?:    string;  // user que acabou de transicionar (não notifica ele mesmo)
+}): Promise<void> {
+  const { getResponsibility } = await import("@/services/responsavel.service");
+
+  const req = await prisma.deliveryRequest.findUnique({
+    where: { id: args.deliveryRequestId },
+    select: {
+      id: true, orderNumber: true, status: true, storeId: true,
+      dispatchStoreId: true, entregaPeloCD: true,
+      store: { select: { code: true } },
+    },
+  });
+  if (!req) return;
+
+  const resp = getResponsibility({
+    status:          req.status,
+    storeId:         req.storeId,
+    dispatchStoreId: req.dispatchStoreId,
+    entregaPeloCD:   req.entregaPeloCD,
+  });
+  if (!resp) return;  // status terminal (DELIVERED, CANCELLED, etc.)
+
+  // Busca usuários da loja responsável com role compatível
+  const users = await prisma.user.findMany({
+    where: {
+      storeId: resp.responsibleStoreId,
+      active:  true,
+      role:    { in: [resp.primaryRole, ...resp.fallbackRoles] },
+    },
+    select: { id: true },
+  });
+  const recipients = users
+    .map(u => u.id)
+    .filter(id => id !== args.excludeUserId);
+  if (recipients.length === 0) return;
+
+  const label = req.orderNumber
+    ? `PD ${req.orderNumber}${req.store?.code ? ` · Loja ${req.store.code}` : ""}`
+    : `Solicitação #${req.id.slice(-6)}`;
+
+  await createNotification(recipients, {
+    type:  "ACTION_REQUIRED",
+    title: `Ação pendente: ${resp.actionLabel}`,
+    body:  `${label} — aguardando sua ${resp.actionLabel}`,
+    link:  `/solicitacoes?detail=${req.id}`,
+    metadata: {
+      deliveryRequestId: req.id,
+      status:            req.status,
+      actionLabel:       resp.actionLabel,
+    },
   });
 }

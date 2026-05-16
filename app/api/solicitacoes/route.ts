@@ -449,6 +449,20 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // Notifica o próximo responsável (PENDING → STOCK_OPERATOR do CD ou líder local).
+    // Best-effort: erro não bloqueia a criação da solicitação.
+    void (async () => {
+      try {
+        const { notifyNextResponsible } = await import("@/services/notifications.service");
+        await notifyNextResponsible({
+          deliveryRequestId: deliveryRequest.id,
+          excludeUserId:     session.userId, // não notifica o próprio vendedor
+        });
+      } catch (err) {
+        console.error("[solicitacoes:POST] notifyNextResponsible falhou:", err instanceof Error ? err.message : err);
+      }
+    })();
+
     return NextResponse.json(apiSuccess(deliveryRequest), { status: 201 });
   } catch (error: unknown) {
     if ((error as { code?: string }).code === "P2002") {

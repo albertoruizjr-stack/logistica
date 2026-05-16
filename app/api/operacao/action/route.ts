@@ -49,6 +49,13 @@ export async function POST(req: NextRequest) {
 
     const { requestId, toStatus, ...meta } = parsed.data;
 
+    // Para SEPARADO, o gate operacional exige `separatedBy` (userId de quem confere).
+    // Quando o frontend não envia (caso do botão "Próxima ação" no drawer), assume
+    // que quem clicou é quem está confirmando — usa session.userId.
+    if (toStatus === "SEPARADO" && !meta.separatedBy) {
+      meta.separatedBy = session.userId;
+    }
+
     const updated = await transitionDeliveryRequest({
       requestId,
       actorId:  session.userId,
