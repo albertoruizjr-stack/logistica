@@ -160,6 +160,10 @@ export default async function SolicitacoesPage({
     take: 300,
   });
 
+  // ── Avalia responsabilidade pra cada solicitação (controla visibilidade do botão na lista) ──
+  // Importa local pra não vazar lógica de servidor em outros lugares
+  const { getResponsibility, canUserAct } = await import("@/services/responsavel.service");
+
   // ── Alertas ERP abertos por solicitação ──
   // Usa raw SQL porque ERPSyncAlert ainda não está no Prisma client gerado.
   // O .catch(() => []) garante que a página funciona antes da migration rodar.
@@ -183,33 +187,47 @@ export default async function SolicitacoesPage({
 
   // ── Serializa e ordena ──
   const rows: SolicitacaoCardData[] = requests
-    .map((req) => ({
-      id:              req.id,
-      orderNumber:     req.orderNumber,
-      orderStoreCode:  req.orderStore?.code ?? null,
-      invoiceNumber:   req.invoiceNumber,
-      nfLinkError:     req.nfLinkError,
-      erpAlertCount:   erpAlertMap.get(req.id)?.count ?? 0,
-      erpAlertSeverity: erpAlertMap.get(req.id)?.severity ?? null,
-      status:          req.status,
-      deliveryType:    req.deliveryType,
-      scheduledFor:    req.scheduledFor?.toISOString() ?? null,
-      createdAt:       req.createdAt.toISOString(),
-      customerName:    req.customerName,
-      storeCode:       req.store.code,
-      sellerName:      req.seller.name,
-      itemCount:       req.items.length,
-      missingItemCount: req.items.filter((i) => !i.availableAtStore).length,
-      activeTransferId: req.transfers[0]?.id ?? null,
-      items:           req.items.map((i) => ({
-        id:              i.id,
-        productCode:     i.productCode,
-        productName:     i.productName,
-        quantity:        i.quantity,
-        unit:            i.unit,
-        availableAtStore: i.availableAtStore,
-      })),
-    }))
+    .map((req) => {
+      const responsibility = getResponsibility({
+        status:          req.status,
+        storeId:         req.storeId,
+        dispatchStoreId: req.dispatchStoreId,
+        entregaPeloCD:   req.entregaPeloCD,
+      });
+      const canActOnNextStage = canUserAct(
+        { role: session.role, storeId: session.storeId ?? "" },
+        responsibility,
+      );
+
+      return {
+        id:              req.id,
+        orderNumber:     req.orderNumber,
+        orderStoreCode:  req.orderStore?.code ?? null,
+        invoiceNumber:   req.invoiceNumber,
+        nfLinkError:     req.nfLinkError,
+        erpAlertCount:   erpAlertMap.get(req.id)?.count ?? 0,
+        erpAlertSeverity: erpAlertMap.get(req.id)?.severity ?? null,
+        status:          req.status,
+        deliveryType:    req.deliveryType,
+        scheduledFor:    req.scheduledFor?.toISOString() ?? null,
+        createdAt:       req.createdAt.toISOString(),
+        customerName:    req.customerName,
+        storeCode:       req.store.code,
+        sellerName:      req.seller.name,
+        itemCount:       req.items.length,
+        missingItemCount: req.items.filter((i) => !i.availableAtStore).length,
+        activeTransferId: req.transfers[0]?.id ?? null,
+        canActOnNextStage,
+        items:           req.items.map((i) => ({
+          id:              i.id,
+          productCode:     i.productCode,
+          productName:     i.productName,
+          quantity:        i.quantity,
+          unit:            i.unit,
+          availableAtStore: i.availableAtStore,
+        })),
+      };
+    })
     .sort((a, b) => {
       const pa = priorityOrder(a);
       const pb = priorityOrder(b);

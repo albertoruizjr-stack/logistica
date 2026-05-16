@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSessionFromRequest } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { apiSuccess, apiError } from "@/types";
+import { getResponsibility } from "@/services/responsavel.service";
 
 // GET /api/solicitacoes/[id]
 // Retorna resumo da solicitação para o drawer de detalhes.
@@ -69,6 +70,37 @@ export async function GET(
       0,
     );
 
+    // Calcula responsabilidade da próxima ação (Fase A — controla visibilidade do botão na UI)
+    const responsibility = getResponsibility({
+      status:          request.status,
+      storeId:         request.storeId,
+      dispatchStoreId: request.dispatchStoreId,
+      entregaPeloCD:   request.entregaPeloCD,
+    });
+
+    // Carrega responsáveis nominais (até 5) pra UI mostrar "Aguardando: X, Y, Z"
+    let responsibleUsers: Array<{ id: string; name: string; role: string }> = [];
+    let responsibleStoreCode: string | null = null;
+    if (responsibility) {
+      const [users, store] = await Promise.all([
+        prisma.user.findMany({
+          where: {
+            storeId: responsibility.responsibleStoreId,
+            active:  true,
+            role:    { in: [responsibility.primaryRole, ...responsibility.fallbackRoles] },
+          },
+          select: { id: true, name: true, role: true },
+          take: 5,
+        }),
+        prisma.store.findUnique({
+          where: { id: responsibility.responsibleStoreId },
+          select: { code: true },
+        }),
+      ]);
+      responsibleUsers     = users;
+      responsibleStoreCode = store?.code ?? null;
+    }
+
     // unifica info de motorista — preferência: Lalamove (mais atualizado), fallback: driver do cadastro
     const dispatchInfo = request.dispatch
       ? {
@@ -118,6 +150,17 @@ export async function GET(
       // contexto para decisões da UI (visibilidade de botões)
       currentUserRole:    session.role,
       currentUserStoreId: session.storeId,
+      // Responsabilidade pela próxima ação (Fase A — controla botão + mensagem "Aguardando")
+      entregaPeloCD:      request.entregaPeloCD,
+      dispatchStoreId:    request.dispatchStoreId,
+      responsibility: responsibility ? {
+        responsibleStoreId:   responsibility.responsibleStoreId,
+        responsibleStoreCode: responsibleStoreCode,
+        primaryRole:          responsibility.primaryRole,
+        fallbackRoles:        responsibility.fallbackRoles,
+        actionLabel:          responsibility.actionLabel,
+        responsibleUsers,
+      } : null,
       transfers: request.transfers.map(t => ({
         id:            t.id,
         status:        t.status,

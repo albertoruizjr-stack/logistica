@@ -155,6 +155,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(apiError("Loja do pedido não encontrada"), { status: 400 });
     }
 
+    // Busca o CD (loja 132) — usado quando entregaPeloCD=true (despacho roda do CD)
+    const cdStore = await prisma.store.findFirst({
+      where: { code: "132", active: true },
+      select: { id: true },
+    });
+
     // Consulta Citel: não-bloqueante — se indisponível, marca CITEL_DOWN e continua
     const citelResult = orderStore.codigoEmpresaCitel
       ? await enrichDeliveryRequestStock(
@@ -216,6 +222,12 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Decide responsabilidade pela separação/despacho com base no Citel:
+    //   entregaPeloCD=true  → CD (132) cuida da separação E do despacho
+    //   entregaPeloCD=false → loja do vendedor cuida (separação local + despacho local)
+    const isEntregaCD     = citelResult?.isEntregaCD ?? false;
+    const dispatchStoreId = (isEntregaCD && cdStore?.id) ? cdStore.id : data.storeId;
+
     const deliveryRequest = await prisma.deliveryRequest.create({
       data: {
         orderNumber:      data.orderNumber,
@@ -224,6 +236,9 @@ export async function POST(req: NextRequest) {
         invoiceStoreId:   null,
         storeId:          data.storeId,
         sellerId:         session.userId,
+        // Responsabilidade pela separação/despacho (Fase A do bloco "próxima ação")
+        entregaPeloCD:    isEntregaCD,
+        dispatchStoreId,
         customerName:     data.customerName,
         customerPhone:    data.customerPhone,
         deliveryAddress:  data.deliveryAddress,

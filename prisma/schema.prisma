@@ -431,7 +431,8 @@ model DeliveryRequest {
   invoiceStoreId  String?               // loja emissora da NF (geralmente CD/132)
 
   storeId         String                // loja que fez a solicitação (vendedor cobra zona daqui)
-  dispatchStoreId String?               // loja de despacho operacional (CD/132). null = legado, usa storeId
+  dispatchStoreId String?               // loja de despacho operacional. true entregaPeloCD → 132; senão → storeId
+  entregaPeloCD   Boolean  @default(false) // espelha cabecalho.entregaPeloCD do Citel — define responsável pela separação
   sellerId        String
   // dados do destinatário (sempre preenchidos pelo vendedor)
   customerId      String?

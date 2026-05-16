@@ -56,6 +56,17 @@ interface SolicitacaoDetail {
   notes:             string | null;
   currentUserRole:    string;
   currentUserStoreId: string;
+  // Responsabilidade pela próxima ação (Fase A)
+  entregaPeloCD?:     boolean;
+  dispatchStoreId?:   string | null;
+  responsibility?: {
+    responsibleStoreId:   string;
+    responsibleStoreCode: string | null;
+    primaryRole:          string;
+    fallbackRoles:        string[];
+    actionLabel:          string;
+    responsibleUsers:     Array<{ id: string; name: string; role: string }>;
+  } | null;
   transfers: TransferSummary[];
 }
 
@@ -517,51 +528,90 @@ export function SolicitacaoDetailDrawer({ requestId, onClose }: Props) {
                 )}
               </div>
 
-              {/* Próxima ação — botão da fase atual, sempre em destaque */}
+              {/* Próxima ação — botão pro responsável; mensagem informativa pros demais */}
               {(() => {
                 // Mapa status atual → próxima ação principal
-                // Roles: lista de roles que podem clicar (controla visibilidade do botão)
-                const NEXT_ACTION: Record<string, { label: string; toStatus: string; roles: string[] }> = {
-                  PENDING:             { label: "Confirmar separação",     toStatus: "SEPARADO",            roles: ["ADMIN","OPERATOR","STOCK_OPERATOR","STORE_LEADER"] },
-                  AWAITING_TRANSFER:   { label: "Seguir para Separação",   toStatus: "SEPARADO",            roles: ["ADMIN","OPERATOR","STOCK_OPERATOR","STORE_LEADER"] },
-                  SEPARADO:            { label: "Solicitar NF ao CD",      toStatus: "AGUARDANDO_NF",       roles: ["ADMIN","OPERATOR","LOGISTICS_OPERATOR","STORE_LEADER"] },
-                  AGUARDANDO_NF:       { label: "NF emitida no Citel",     toStatus: "NF_VINCULADA",        roles: ["ADMIN","OPERATOR","LOGISTICS_OPERATOR"] },
-                  NF_VINCULADA:        { label: "Liberar para Roteirização", toStatus: "PRONTO_ROTEIRIZACAO", roles: ["ADMIN","OPERATOR","LOGISTICS_OPERATOR"] },
-                  PRONTO_ROTEIRIZACAO: { label: "Roteirizar",              toStatus: "ROTEIRIZADO",         roles: ["ADMIN","OPERATOR","LOGISTICS_OPERATOR"] },
-                  ROTEIRIZADO:         { label: "Despachar",               toStatus: "DISPATCHED",          roles: ["ADMIN","OPERATOR","LOGISTICS_OPERATOR"] },
-                  IN_TRANSIT:          { label: "Confirmar Entrega",       toStatus: "DELIVERED",           roles: ["ADMIN","OPERATOR","LOGISTICS_OPERATOR","DRIVER"] },
+                const NEXT_ACTION: Record<string, { label: string; toStatus: string }> = {
+                  PENDING:             { label: "Confirmar separação",     toStatus: "SEPARADO"            },
+                  AWAITING_TRANSFER:   { label: "Seguir para Separação",   toStatus: "SEPARADO"            },
+                  SEPARADO:            { label: "Solicitar NF ao CD",      toStatus: "AGUARDANDO_NF"       },
+                  AGUARDANDO_NF:       { label: "NF emitida no Citel",     toStatus: "NF_VINCULADA"        },
+                  NF_VINCULADA:        { label: "Liberar para Roteirização", toStatus: "PRONTO_ROTEIRIZACAO" },
+                  PRONTO_ROTEIRIZACAO: { label: "Roteirizar",              toStatus: "ROTEIRIZADO"         },
+                  ROTEIRIZADO:         { label: "Despachar",               toStatus: "DISPATCHED"          },
+                  IN_TRANSIT:          { label: "Confirmar Entrega",       toStatus: "DELIVERED"           },
                 };
                 const action = NEXT_ACTION[data.status];
                 if (!action) return null;
-                const canAct = action.roles.includes(data.currentUserRole);
-                if (!canAct) return null;
-                // Casos especiais:
-                //  - AWAITING_TRANSFER usa handler dedicado (auto-resolve transfers)
-                //  - AGUARDANDO_NF abre modal pra capturar número da NF antes de avançar
-                const isPromote = data.status === "AWAITING_TRANSFER";
-                const isNfStep  = data.status === "AGUARDANDO_NF";
-                const onClick   = isPromote
-                  ? handlePromoteToSeparation
-                  : isNfStep
-                    ? openNfModal
-                    : () => handleAdvanceStage(action.toStatus);
-                const busy = isPromote ? promotingSeparation : isNfStep ? submittingNf : advancingStage;
+
+                // Regra de visibilidade (Fase A):
+                //   - ADMIN sempre pode agir (override global)
+                //   - Senão: precisa estar na loja responsável E ter role compatível
+                const resp = data.responsibility;
+                const isAdmin = data.currentUserRole === "ADMIN";
+                const canAct  = isAdmin || (
+                  !!resp &&
+                  data.currentUserStoreId === resp.responsibleStoreId &&
+                  [resp.primaryRole, ...resp.fallbackRoles].includes(data.currentUserRole)
+                );
+
+                if (canAct) {
+                  // Casos especiais:
+                  //  - AWAITING_TRANSFER usa handler dedicado (auto-resolve transfers)
+                  //  - AGUARDANDO_NF abre modal pra capturar número da NF antes de avançar
+                  const isPromote = data.status === "AWAITING_TRANSFER";
+                  const isNfStep  = data.status === "AGUARDANDO_NF";
+                  const onClick   = isPromote
+                    ? handlePromoteToSeparation
+                    : isNfStep
+                      ? openNfModal
+                      : () => handleAdvanceStage(action.toStatus);
+                  const busy = isPromote ? promotingSeparation : isNfStep ? submittingNf : advancingStage;
+                  return (
+                    <section>
+                      <p className="text-[10.5px] font-semibold uppercase mb-1.5"
+                         style={{ letterSpacing: "0.10em", color: "var(--color-muted-text)" }}>
+                        Próxima ação
+                      </p>
+                      <button onClick={onClick}
+                              disabled={busy}
+                              className="w-full flex items-center justify-center gap-2 text-[13px] font-bold py-3 rounded-lg transition-all disabled:opacity-60"
+                              style={{ backgroundColor: "var(--color-primary)", color: "white", boxShadow: "0 2px 8px rgba(249,115,22,0.25)" }}
+                              onMouseEnter={(e) => (e.currentTarget as HTMLElement).style.backgroundColor = "var(--color-primary-dark)"}
+                              onMouseLeave={(e) => (e.currentTarget as HTMLElement).style.backgroundColor = "var(--color-primary)"}>
+                        {busy
+                          ? <><Loader2 className="w-4 h-4 animate-spin" /> Processando…</>
+                          : <><CheckCircle2 className="w-4 h-4" /> {action.label}</>}
+                      </button>
+                    </section>
+                  );
+                }
+
+                // Não-responsável: mostra mensagem informativa com quem deve agir
+                if (!resp) return null;
+                const ROLE_LABEL: Record<string, string> = {
+                  STOCK_OPERATOR:     "Estoque",
+                  LOGISTICS_OPERATOR: "Logística",
+                  STORE_LEADER:       "Líder",
+                  OPERATOR:           "Operador",
+                };
+                const names = resp.responsibleUsers.length > 0
+                  ? resp.responsibleUsers.map(u => `${u.name} (${ROLE_LABEL[u.role] ?? u.role})`).join(", ")
+                  : `${ROLE_LABEL[resp.primaryRole] ?? resp.primaryRole} da loja`;
+                const storeLabel = resp.responsibleStoreCode ? ` — Loja ${resp.responsibleStoreCode}` : "";
                 return (
                   <section>
                     <p className="text-[10.5px] font-semibold uppercase mb-1.5"
                        style={{ letterSpacing: "0.10em", color: "var(--color-muted-text)" }}>
                       Próxima ação
                     </p>
-                    <button onClick={onClick}
-                            disabled={busy}
-                            className="w-full flex items-center justify-center gap-2 text-[13px] font-bold py-3 rounded-lg transition-all disabled:opacity-60"
-                            style={{ backgroundColor: "var(--color-primary)", color: "white", boxShadow: "0 2px 8px rgba(249,115,22,0.25)" }}
-                            onMouseEnter={(e) => (e.currentTarget as HTMLElement).style.backgroundColor = "var(--color-primary-dark)"}
-                            onMouseLeave={(e) => (e.currentTarget as HTMLElement).style.backgroundColor = "var(--color-primary)"}>
-                      {busy
-                        ? <><Loader2 className="w-4 h-4 animate-spin" /> Processando…</>
-                        : <><CheckCircle2 className="w-4 h-4" /> {action.label}</>}
-                    </button>
+                    <div className="rounded-lg px-3.5 py-3 text-[12.5px] leading-snug"
+                         style={{ backgroundColor: "rgba(99,102,241,0.05)", border: "1px solid rgba(99,102,241,0.18)", color: "var(--color-body-text)" }}>
+                      <p className="font-semibold mb-0.5">Aguardando {resp.actionLabel}</p>
+                      <p style={{ color: "var(--color-muted-text)" }}>
+                        Responsável: {names}{storeLabel}
+                      </p>
+                    </div>
                   </section>
                 );
               })()}

@@ -32,6 +32,9 @@ export interface SolicitacaoCardData {
   itemCount: number;
   missingItemCount: number;
   activeTransferId: string | null;
+  // Pré-calculado no servidor: o usuário logado pode agir nessa solicitação?
+  // (true → mostra botão "Confirmar separação"; false → mostra "Ver detalhes")
+  canActOnNextStage: boolean;
   items: {
     id: string;
     productCode: string;
@@ -260,6 +263,15 @@ function SolicitacaoCard({
           </Link>
         );
       case "PENDING":
+        // Só mostra o botão pra quem pode agir (estoque da loja responsável + ADMIN).
+        // Outros veem "Ver detalhes" — abrindo o drawer enxergam quem é o responsável.
+        if (!row.canActOnNextStage) {
+          return (
+            <span className="text-[12px] font-medium text-gray-500 whitespace-nowrap flex items-center gap-1">
+              Ver detalhes <ChevronRight className="w-3.5 h-3.5" />
+            </span>
+          );
+        }
         return (
           <button
             onClick={(e) => { e.stopPropagation(); onConfirmSeparacao(row); }}
