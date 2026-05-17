@@ -7,10 +7,31 @@ import {
   Bike, Car, Truck, MapPin, Clock, Package,
   ArrowLeftRight, ExternalLink, RefreshCw, Wifi, WifiOff,
 } from "lucide-react";
+import RouteProgressCard from "./route-progress-card";
 
 // ──────────────────────────────────────────────
 // TIPOS (refletem os dados serializados do Server Component)
 // ──────────────────────────────────────────────
+
+export interface RouteStop {
+  deliveryRequestId: string;
+  stopPosition:      number | null;
+  eta:               string | null;
+  status:            string;
+  docLabel:          string;
+  customerName:      string | null;
+  address:           string | null;
+  lat:               number | null;
+  lng:               number | null;
+}
+
+export interface ActiveRoute {
+  id:                string;
+  name:              string | null;
+  stopCount:         number;
+  estimatedReturnAt: string | null;
+  stops:             RouteStop[];
+}
 
 export interface DriverCardData {
   id: string;
@@ -19,7 +40,7 @@ export interface DriverCardData {
   vehicleType: string | null;
   licensePlate: string | null;
   available: boolean;
-  store: { code: string; name: string };
+  store: { code: string; name: string; lat: number; lng: number };
   lastLocation: {
     lat: number;
     lng: number;
@@ -27,6 +48,7 @@ export interface DriverCardData {
     timestamp: string;
     source: string;
   } | null;
+  activeRoute: ActiveRoute | null;
   activeDispatches: {
     id: string;
     modal: string;
@@ -100,8 +122,8 @@ export function DriverCards({ initialDrivers }: { initialDrivers: DriverCardData
     setTimeout(() => setRefreshing(false), 800);
   }
 
-  const active = initialDrivers.filter((d) => !d.available || d.activeDispatches.length > 0);
-  const available = initialDrivers.filter((d) => d.available && d.activeDispatches.length === 0);
+  const active = initialDrivers.filter((d) => !d.available || d.activeDispatches.length > 0 || d.activeRoute);
+  const available = initialDrivers.filter((d) => d.available && d.activeDispatches.length === 0 && !d.activeRoute);
 
   return (
     <div>
@@ -245,8 +267,13 @@ function DriverCard({ driver, highlight }: { driver: DriverCardData; highlight: 
         )}
       </div>
 
-      {/* Despachos ativos */}
-      {driver.activeDispatches.length > 0 ? (
+      {/* Card de rota em andamento (substitui despachos quando há rota) */}
+      {driver.activeRoute && (
+        <RouteProgressCard driver={driver} route={driver.activeRoute} />
+      )}
+
+      {/* Despachos ativos (mostra quando NÃO é rota interna ou rota sem detalhes) */}
+      {!driver.activeRoute && driver.activeDispatches.length > 0 ? (
         <div className="px-4 py-3 space-y-2">
           {driver.activeDispatches.map((dispatch) => (
             <div key={dispatch.id} className="flex items-center gap-2">
@@ -276,11 +303,11 @@ function DriverCard({ driver, highlight }: { driver: DriverCardData; highlight: 
             </div>
           ))}
         </div>
-      ) : (
+      ) : !driver.activeRoute && driver.activeDispatches.length === 0 ? (
         <div className="px-4 py-3">
           <p className="text-xs text-green-600 font-medium">Disponível para nova rota</p>
         </div>
-      )}
+      ) : null}
 
       {/* Veículo */}
       {driver.licensePlate && (

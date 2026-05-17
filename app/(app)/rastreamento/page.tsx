@@ -19,7 +19,7 @@ export default async function RastreamentoPage() {
   const drivers = await prisma.driver.findMany({
     where: { active: true },
     include: {
-      store: { select: { code: true, name: true } },
+      store: { select: { code: true, name: true, lat: true, lng: true } },
       // última localização conhecida
       locations: {
         orderBy: { timestamp: "desc" },
@@ -52,6 +52,19 @@ export default async function RastreamentoPage() {
           },
         },
       },
+      // rota DISPATCHED atual (uma por vez) — pra mostrar progresso e mapa
+      routes: {
+        where:   { status: "DISPATCHED" },
+        take:    1,
+        orderBy: { createdAt: "desc" },
+        select: {
+          id:                true,
+          name:              true,
+          sequenceJson:      true,
+          stopCount:         true,
+          estimatedReturnAt: true,
+        },
+      },
     },
     orderBy: [
       { available: "asc" }, // ocupados primeiro
@@ -59,42 +72,104 @@ export default async function RastreamentoPage() {
     ],
   });
 
+  // Coleta DRs de todas as rotas em uma query — evita N+1.
+  const allRouteStopIds = drivers.flatMap((d) =>
+    d.routes.flatMap((r) => {
+      const seq = (r.sequenceJson as unknown as Array<{ deliveryRequestId: string }> | null) ?? [];
+      return seq.map((s) => s.deliveryRequestId);
+    }),
+  );
+
+  const routeStopMeta = allRouteStopIds.length > 0
+    ? await prisma.deliveryRequest.findMany({
+        where:  { id: { in: allRouteStopIds } },
+        select: {
+          id:              true,
+          status:          true,
+          invoiceNumber:   true,
+          orderNumber:     true,
+          customerName:    true,
+          deliveryAddress: true,
+          deliveryLat:     true,
+          deliveryLng:     true,
+        },
+      })
+    : [];
+  const stopMetaMap = new Map(routeStopMeta.map((s) => [s.id, s]));
+
   // serializa para o Client Component (Dates → strings)
-  const driverData: DriverCardData[] = drivers.map((d) => ({
-    id: d.id,
-    name: d.name,
-    phone: d.phone,
-    vehicleType: d.vehicleType,
-    licensePlate: d.licensePlate,
-    available: d.available,
-    store: d.store,
-    lastLocation: d.locations[0]
-      ? {
-          lat: d.locations[0].lat,
-          lng: d.locations[0].lng,
-          speed: d.locations[0].speed,
-          timestamp: d.locations[0].timestamp.toISOString(),
-          source: d.locations[0].source,
-        }
-      : null,
-    activeDispatches: d.dispatches.map((dp) => ({
-      id: dp.id,
-      modal: dp.modal,
-      status: dp.status,
-      transfer: dp.transfer
+  const driverData: DriverCardData[] = drivers.map((d) => {
+    const route = d.routes[0] ?? null;
+    const seq   = (route?.sequenceJson as unknown as Array<{
+      stopPosition: number | null;
+      deliveryRequestId: string;
+      eta: string | number | null;
+    }> | null) ?? [];
+
+    const stops = seq.map((s) => {
+      const meta = stopMetaMap.get(s.deliveryRequestId);
+      return {
+        deliveryRequestId: s.deliveryRequestId,
+        stopPosition:      s.stopPosition,
+        eta:               s.eta ? new Date(s.eta).toISOString() : null,
+        status:            meta?.status ?? "UNKNOWN",
+        docLabel:          meta?.invoiceNumber
+          ? `NF ${meta.invoiceNumber}`
+          : meta?.orderNumber
+            ? `PD ${meta.orderNumber}`
+            : `#${s.deliveryRequestId.slice(-6)}`,
+        customerName:      meta?.customerName ?? null,
+        address:           meta?.deliveryAddress ?? null,
+        lat:               meta?.deliveryLat ?? null,
+        lng:               meta?.deliveryLng ?? null,
+      };
+    });
+
+    return {
+      id: d.id,
+      name: d.name,
+      phone: d.phone,
+      vehicleType: d.vehicleType,
+      licensePlate: d.licensePlate,
+      available: d.available,
+      store: { code: d.store.code, name: d.store.name, lat: d.store.lat, lng: d.store.lng },
+      lastLocation: d.locations[0]
         ? {
-            fromStore: { code: dp.transfer.fromStore.code },
-            toStore:   { code: dp.transfer.toStore.code },
+            lat: d.locations[0].lat,
+            lng: d.locations[0].lng,
+            speed: d.locations[0].speed,
+            timestamp: d.locations[0].timestamp.toISOString(),
+            source: d.locations[0].source,
           }
         : null,
-      deliveryRequest: dp.deliveryRequest
+      activeRoute: route
         ? {
-            invoiceNumber: dp.deliveryRequest.invoiceNumber ?? "",
-            customerName:  dp.deliveryRequest.customerName,
+            id:                route.id,
+            name:              route.name,
+            stopCount:         route.stopCount ?? stops.length,
+            estimatedReturnAt: route.estimatedReturnAt?.toISOString() ?? null,
+            stops,
           }
         : null,
-    })),
-  }));
+      activeDispatches: d.dispatches.map((dp) => ({
+        id: dp.id,
+        modal: dp.modal,
+        status: dp.status,
+        transfer: dp.transfer
+          ? {
+              fromStore: { code: dp.transfer.fromStore.code },
+              toStore:   { code: dp.transfer.toStore.code },
+            }
+          : null,
+        deliveryRequest: dp.deliveryRequest
+          ? {
+              invoiceNumber: dp.deliveryRequest.invoiceNumber ?? "",
+              customerName:  dp.deliveryRequest.customerName,
+            }
+          : null,
+      })),
+    };
+  });
 
   const totalActive = driverData.filter(
     (d) => !d.available || d.activeDispatches.length > 0
