@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import LogoutButton from "./_components/logout-button";
+import DriverLocationTracker from "./_components/driver-location-tracker";
 
 // Layout do app móvel do motorista — mobile-first, sem sidebar.
 // Cabeçalho fixo com nome + logout.
@@ -22,6 +23,7 @@ export default async function DriverLayout({ children }: { children: React.React
       </header>
 
       <main className="flex-1 max-w-2xl w-full mx-auto px-4 py-4 pb-16">
+        <DriverLocationTracker />
         {children}
       </main>
     </div>
