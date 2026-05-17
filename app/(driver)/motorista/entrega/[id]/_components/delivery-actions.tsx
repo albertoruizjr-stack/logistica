@@ -4,6 +4,7 @@ import { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Camera, CheckCircle2, AlertTriangle, Loader2, X, FileSignature, Package } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { compressImage } from "@/lib/image-compress";
 
 interface ExistingProof {
   id:        string;
@@ -26,6 +27,25 @@ export default function DeliveryActions({ deliveryRequestId, existingProofs }: P
   const [materialFile, setMaterialFile] = useState<File | null>(null);
   const [submitting,   setSubmitting]   = useState(false);
   const [error,        setError]        = useState<string | null>(null);
+  const [preparing,    setPreparing]    = useState<"receipt" | "material" | null>(null);
+
+  async function handlePick(slot: "receipt" | "material", raw: File | null) {
+    if (!raw) return;
+    setError(null);
+    setPreparing(slot);
+    try {
+      const compressed = await compressImage(raw);
+      if (slot === "receipt")  setReceiptFile(compressed);
+      else                     setMaterialFile(compressed);
+    } catch {
+      // Se a compressão falhar (HEIC sem suporte no canvas, p.ex.), usa o arquivo original.
+      // Server ainda valida 10 MB e devolve erro tratado.
+      if (slot === "receipt")  setReceiptFile(raw);
+      else                     setMaterialFile(raw);
+    } finally {
+      setPreparing(null);
+    }
+  }
 
   const [occurrenceOpen, setOccurrenceOpen] = useState(false);
   const [occurrenceType, setOccurrenceType] = useState("");
@@ -51,9 +71,9 @@ export default function DeliveryActions({ deliveryRequestId, existingProofs }: P
         method: "POST",
         body:   fd,
       });
-      const json = await res.json();
-      if (!res.ok || !json.success) {
-        setError(json.error ?? "Erro ao confirmar entrega");
+      const parsed = await safeReadJson(res);
+      if (!res.ok || !parsed.success) {
+        setError(parsed.error ?? friendlyHttpError(res.status));
         return;
       }
       router.push("/motorista");
@@ -78,9 +98,9 @@ export default function DeliveryActions({ deliveryRequestId, existingProofs }: P
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type: occurrenceType, notes: occurrenceNotes.trim() }),
       });
-      const json = await res.json();
-      if (!res.ok || !json.success) {
-        setError(json.error ?? "Erro ao registrar ocorrência");
+      const parsed = await safeReadJson(res);
+      if (!res.ok || !parsed.success) {
+        setError(parsed.error ?? friendlyHttpError(res.status));
         return;
       }
       router.push("/motorista");
@@ -105,6 +125,7 @@ export default function DeliveryActions({ deliveryRequestId, existingProofs }: P
           label="Canhoto assinado"
           icon={FileSignature}
           file={receiptFile}
+          preparing={preparing === "receipt"}
           existing={existingProofs.find((p) => p.type === "RECEIPT")}
           onPick={() => receiptRef.current?.click()}
           onClear={() => setReceiptFile(null)}
@@ -115,13 +136,17 @@ export default function DeliveryActions({ deliveryRequestId, existingProofs }: P
           accept="image/*"
           capture="environment"
           className="hidden"
-          onChange={(e) => setReceiptFile(e.target.files?.[0] ?? null)}
+          onChange={(e) => {
+            void handlePick("receipt", e.target.files?.[0] ?? null);
+            e.target.value = "";
+          }}
         />
 
         <PhotoSlot
           label="Material na obra"
           icon={Package}
           file={materialFile}
+          preparing={preparing === "material"}
           existing={existingProofs.find((p) => p.type === "MATERIAL")}
           onPick={() => materialRef.current?.click()}
           onClear={() => setMaterialFile(null)}
@@ -132,7 +157,10 @@ export default function DeliveryActions({ deliveryRequestId, existingProofs }: P
           accept="image/*"
           capture="environment"
           className="hidden"
-          onChange={(e) => setMaterialFile(e.target.files?.[0] ?? null)}
+          onChange={(e) => {
+            void handlePick("material", e.target.files?.[0] ?? null);
+            e.target.value = "";
+          }}
         />
       </div>
 
@@ -257,16 +285,18 @@ function PhotoSlot({
   label,
   icon: Icon,
   file,
+  preparing,
   existing,
   onPick,
   onClear,
 }: {
-  label:    string;
-  icon:     React.ComponentType<{ className?: string }>;
-  file:     File | null;
+  label:     string;
+  icon:      React.ComponentType<{ className?: string }>;
+  file:      File | null;
+  preparing: boolean;
   existing?: ExistingProof;
-  onPick:   () => void;
-  onClear:  () => void;
+  onPick:    () => void;
+  onClear:   () => void;
 }) {
   const isOk = Boolean(file || existing);
 
@@ -278,17 +308,22 @@ function PhotoSlot({
       <Icon className={cn("w-5 h-5 flex-shrink-0", isOk ? "text-green-600" : "text-gray-400")} />
       <div className="min-w-0 flex-1">
         <p className="text-sm font-semibold text-gray-900">{label}</p>
-        {existing && !file && (
+        {preparing && (
+          <p className="text-[11px] text-gray-600 flex items-center gap-1">
+            <Loader2 className="w-3 h-3 animate-spin" /> Preparando foto…
+          </p>
+        )}
+        {!preparing && existing && !file && (
           <p className="text-[11px] text-gray-600">enviada {new Date(existing.createdAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}</p>
         )}
-        {file && (
+        {!preparing && file && (
           <p className="text-[11px] text-gray-600 truncate">{file.name} · {Math.round(file.size / 1024)} KB</p>
         )}
-        {!isOk && (
+        {!preparing && !isOk && (
           <p className="text-[11px] text-gray-500">Toque pra abrir a câmera</p>
         )}
       </div>
-      {file ? (
+      {preparing ? null : file ? (
         <button
           type="button"
           onClick={onClear}
@@ -310,4 +345,26 @@ function PhotoSlot({
       )}
     </div>
   );
+}
+
+async function safeReadJson(res: Response): Promise<{ success?: boolean; error?: string; [k: string]: unknown }> {
+  const text = await res.text();
+  if (!text) return { success: false };
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Server retornou texto/HTML (ex: 413 da Vercel "Request Entity Too Large").
+    // Devolve um objeto com error vazio — o caller cai no friendlyHttpError(status).
+    return { success: false };
+  }
+}
+
+function friendlyHttpError(status: number): string {
+  if (status === 413) return "Foto grande demais. Tire de novo — vamos comprimir.";
+  if (status === 401) return "Sua sessão expirou. Faça login novamente.";
+  if (status === 403) return "Você não tem permissão para esta ação.";
+  if (status === 404) return "Entrega não encontrada.";
+  if (status === 503) return "Serviço temporariamente indisponível. Tente novamente.";
+  if (status >= 500)  return "Erro no servidor. Tente novamente em instantes.";
+  return `Erro ${status}. Tente novamente.`;
 }

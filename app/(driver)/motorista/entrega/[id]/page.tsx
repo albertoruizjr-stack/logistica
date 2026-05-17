@@ -2,8 +2,9 @@ import { redirect, notFound } from "next/navigation";
 import Link from "next/link";
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { ArrowLeft, MapPin, Phone, Navigation, Package, CheckCircle2, AlertTriangle } from "lucide-react";
+import { ArrowLeft, MapPin, Phone, Package, CheckCircle2, AlertTriangle } from "lucide-react";
 import DeliveryActions from "./_components/delivery-actions";
+import NavigateButton from "./_components/navigate-button";
 
 export default async function EntregaDetalhePage({
   params,
@@ -55,8 +56,7 @@ export default async function EntregaDetalhePage({
   const isDelivered = dr.status === "DELIVERED";
   const isOccurrence = dr.status === "OCORRENCIA";
 
-  const mapsHref = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(dr.deliveryAddress)}`;
-  const telHref  = dr.customerPhone ? `tel:${dr.customerPhone.replace(/\D/g, "")}` : null;
+  const telHref = dr.customerPhone ? `tel:${dr.customerPhone.replace(/\D/g, "")}` : null;
 
   return (
     <div className="space-y-4">
@@ -102,15 +102,7 @@ export default async function EntregaDetalhePage({
           </div>
 
           <div className="flex gap-2">
-            <a
-              href={mapsHref}
-              target="_blank"
-              rel="noopener"
-              className="flex-1 flex items-center justify-center gap-2 text-sm font-semibold bg-blue-500 text-white py-3 rounded-lg active:bg-blue-600"
-            >
-              <Navigation className="w-4 h-4" />
-              Navegar
-            </a>
+            <NavigateButton address={[dr.deliveryAddress, dr.deliveryCity].filter(Boolean).join(", ")} />
             {telHref ? (
               <a
                 href={telHref}
