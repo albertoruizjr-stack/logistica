@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { DispatchStatus } from "@prisma/client";
 import { MapPin } from "lucide-react";
 import { DriverCards, type DriverCardData } from "@/components/rastreamento/driver-cards";
+import ResyncRoutesButton from "@/components/rastreamento/resync-routes-button";
 import { PageHeader } from "@/components/ui";
 
 export const dynamic = "force-dynamic"; // sempre busca dados frescos
@@ -175,6 +176,9 @@ export default async function RastreamentoPage() {
     (d) => !d.available || d.activeDispatches.length > 0
   ).length;
 
+  // Botão de ressincronização — só para quem pode despachar rotas (Alberto, Jane, operadores)
+  const canResync = ["ADMIN", "OPERATOR", "LOGISTICS_OPERATOR"].includes(session.role);
+
   return (
     <div className="p-6 max-w-7xl mx-auto">
       <PageHeader
@@ -187,6 +191,7 @@ export default async function RastreamentoPage() {
                 {totalActive} em rota
               </span>
             )}
+            {canResync && <ResyncRoutesButton />}
             <div className="flex items-center gap-1.5 text-xs text-gray-400 bg-white border border-gray-200 rounded-lg px-3 py-2">
               <MapPin className="w-3.5 h-3.5 text-orange-400" />
               Localização via APP ou GPS
