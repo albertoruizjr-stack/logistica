@@ -4,6 +4,7 @@ import { getSessionFromRequest } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/types";
 import { transitionDeliveryRequest } from "@/services/state-machine.service";
 import { uploadProofPhoto, isStorageConfigured } from "@/lib/supabase-storage";
+import { checkAndCompleteRouteFromDeliveryRequest } from "@/services/route-dispatch.service";
 
 const MAX_PHOTO_BYTES = 10 * 1024 * 1024; // 10 MB
 
@@ -121,6 +122,14 @@ export async function POST(
       toStatus:  "DELIVERED",
       metadata:  { reason: "Entrega confirmada pelo motorista com fotos" },
     });
+
+    // Se foi a última DR da rota, fecha a rota e libera o motorista.
+    // Erro aqui não invalida a entrega — apenas loga.
+    try {
+      await checkAndCompleteRouteFromDeliveryRequest(dr.id);
+    } catch (err) {
+      console.error(`[concluir] checkAndCompleteRoute falhou pra DR ${dr.id}`, err);
+    }
 
     return NextResponse.json(apiSuccess({ deliveryRequestId: dr.id, status: "DELIVERED" }));
   } catch (err) {

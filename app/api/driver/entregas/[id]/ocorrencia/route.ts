@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { getSessionFromRequest } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/types";
 import { transitionDeliveryRequest } from "@/services/state-machine.service";
+import { checkAndCompleteRouteFromDeliveryRequest } from "@/services/route-dispatch.service";
 
 const occurrenceSchema = z.object({
   type:  z.enum(["AUSENTE", "RECUSA_ENTREGA", "ENDERECO_ERRADO", "AVARIA"]),
@@ -59,6 +60,13 @@ export async function POST(
         reason:          `Ocorrência registrada pelo motorista: ${parsed.data.type}`,
       },
     });
+
+    // Mesmo cuidado do concluir: se foi a última DR da rota, fecha rota + libera motorista.
+    try {
+      await checkAndCompleteRouteFromDeliveryRequest(dr.id);
+    } catch (err) {
+      console.error(`[ocorrencia] checkAndCompleteRoute falhou pra DR ${dr.id}`, err);
+    }
 
     return NextResponse.json(apiSuccess({ deliveryRequestId: dr.id, type: parsed.data.type }));
   } catch (err) {

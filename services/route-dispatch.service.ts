@@ -112,6 +112,68 @@ export async function dispatchRoute(routeId: string, operatorId: string) {
   };
 }
 
+// ──────────────────────────────────────────────
+// CONCLUSÃO DE ROTA
+// Chamada após cada DR ser finalizada (DELIVERED/OCORRENCIA/CANCELLED).
+// Se TODAS as DRs da rota estão em status final, fecha a rota e libera o motorista.
+// Idempotente: chamadas concorrentes não duplicam efeitos.
+// ──────────────────────────────────────────────
+
+const FINAL_DR_STATUSES = new Set(["DELIVERED", "OCORRENCIA", "CANCELLED"]);
+
+export async function checkAndCompleteRouteFromDeliveryRequest(deliveryRequestId: string) {
+  const dr = await prisma.deliveryRequest.findUnique({
+    where:   { id: deliveryRequestId },
+    select:  { dispatch: { select: { routeId: true } } },
+  });
+  const routeId = dr?.dispatch?.routeId ?? null;
+  if (!routeId) return { skipped: true, reason: "DR sem rota associada" };
+  return checkAndCompleteRoute(routeId);
+}
+
+export async function checkAndCompleteRoute(routeId: string) {
+  const route = await prisma.route.findUnique({
+    where:  { id: routeId },
+    select: { id: true, status: true, driverId: true, sequenceJson: true },
+  });
+  if (!route) return { skipped: true, reason: "Rota não encontrada" };
+  if (route.status === "COMPLETED" || route.status === "CANCELLED") {
+    return { skipped: true, reason: `Rota já em status ${route.status}` };
+  }
+
+  const sequence = (route.sequenceJson as unknown as SequenceStop[] | null) ?? [];
+  const drIds = sequence.map((s) => s.deliveryRequestId);
+  if (drIds.length === 0) return { skipped: true, reason: "Rota sem paradas" };
+
+  const drs = await prisma.deliveryRequest.findMany({
+    where:  { id: { in: drIds } },
+    select: { id: true, status: true },
+  });
+
+  const allFinal = drs.length === drIds.length && drs.every((d) => FINAL_DR_STATUSES.has(d.status));
+  if (!allFinal) {
+    const finished = drs.filter((d) => FINAL_DR_STATUSES.has(d.status)).length;
+    return { skipped: true, reason: `${finished}/${drIds.length} entregas finalizadas` };
+  }
+
+  await prisma.$transaction(async (tx) => {
+    // Re-checa status dentro da tx pra evitar race com chamadas paralelas
+    const fresh = await tx.route.findUnique({ where: { id: route.id }, select: { status: true } });
+    if (fresh?.status === "COMPLETED" || fresh?.status === "CANCELLED") return;
+
+    await tx.route.update({
+      where: { id: route.id },
+      data:  { status: "COMPLETED" },
+    });
+    await tx.driver.update({
+      where: { id: route.driverId },
+      data:  { available: true },
+    });
+  });
+
+  return { completed: true, routeId: route.id, driverId: route.driverId };
+}
+
 // Exclui uma Route ainda não despachada. Reverte DRs vinculadas para PRONTO_ROTEIRIZACAO
 // e libera o motorista. Recusa rotas já despachadas — usar fluxo de cancelamento de dispatch.
 export async function deleteRoute(routeId: string, operatorId: string) {
