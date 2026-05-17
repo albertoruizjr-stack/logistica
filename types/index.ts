@@ -138,6 +138,7 @@ export interface DriverETAResult {
   minutesUntilFree:  number         // 0 = disponível agora
   estimatedFreeAt:   Date
   score:             number         // score composto (0-100) para seleção — ver scoreDriverWithETA
+  etaToOriginMin:    number | null  // tempo de carro até a origem (com trânsito) — null se sem GPS
 }
 
 // ──────────────────────────────────────────────

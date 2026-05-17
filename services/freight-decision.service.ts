@@ -118,7 +118,13 @@ export function scoreDriverForDelivery(
 export interface DecisionParams {
   internalVehicle: InternalVehicleType | "EXCEPTION";
   lalamoveVehicle: LalamoveServiceType | "EXCEPTION";
-  bestDriver: { id: string; name: string; score: number; minutesUntilFree: number } | null;
+  bestDriver: {
+    id: string;
+    name: string;
+    score: number;
+    minutesUntilFree: number;
+    etaToOriginMin?: number | null;  // tempo de carro do driver até a loja (Routes API, com trânsito)
+  } | null;
   internalCost: number;
   lalamoveCost: number | null;
   isUrgent:     boolean;
@@ -136,6 +142,16 @@ export interface ModalDecisionResult {
 
 // Threshold: acima deste tempo de espera, não compensa aguardar frota própria em entrega urgente
 const MAX_URGENT_WAIT_MIN = 20;
+// Tempo médio que Lalamove leva pra um pickup chegar à loja em SP urbano
+const LALAMOVE_PICKUP_MIN = 15;
+
+// Tempo TOTAL até o motorista interno chegar na loja pronto pra sair com o pedido.
+// = tempo pra liberar das entregas atuais + tempo de deslocamento até a loja.
+// Quando não há GPS, etaToOriginMin é null → usa só minutesUntilFree (mais permissivo
+// pra preservar comportamento anterior em drivers sem rastreamento).
+function totalInternalReadyMin(d: NonNullable<DecisionParams["bestDriver"]>): number {
+  return d.minutesUntilFree + (d.etaToOriginMin ?? 0);
+}
 
 export function decideBestDeliveryOption(p: DecisionParams): ModalDecisionResult {
   const internalOk = p.internalVehicle !== "EXCEPTION" && p.bestDriver !== null;
@@ -163,15 +179,21 @@ export function decideBestDeliveryOption(p: DecisionParams): ModalDecisionResult
     }
   }
 
-  // Regra 1: urgente + motorista ocupado por mais de MAX_URGENT_WAIT_MIN → Lalamove
-  const driverTooLong = p.bestDriver !== null && p.bestDriver.minutesUntilFree > MAX_URGENT_WAIT_MIN;
+  // Regra 1: urgente — compara tempo TOTAL interno (espera + deslocamento até loja)
+  // contra tempo do Lalamove (pickup + execução). Decide pelo mais rápido.
+  // Quando há GPS, totalReady é preciso; sem GPS cai pra minutesUntilFree apenas.
+  const totalReady = p.bestDriver ? totalInternalReadyMin(p.bestDriver) : Infinity;
+  const driverTooLong = p.bestDriver !== null && totalReady > MAX_URGENT_WAIT_MIN;
   if (p.isUrgent && lalamoveOk && (driverTooLong || !internalOk)) {
+    const etaNote = p.bestDriver?.etaToOriginMin != null
+      ? ` (livre em ~${Math.round(p.bestDriver.minutesUntilFree)}min + ${Math.round(p.bestDriver.etaToOriginMin)}min até loja)`
+      : "";
     return {
       mode: "LALAMOVE",
       vehicle: p.lalamoveVehicle as LalamoveServiceType,
       requiresManualAssignment: false,
       reason: driverTooLong
-        ? `Urgente — motorista ocupado por ~${Math.round(p.bestDriver!.minutesUntilFree)} min; Lalamove mais rápido (R$ ${p.lalamoveCost!.toFixed(2)})`
+        ? `Urgente — motorista ~${Math.round(totalReady)}min pra ficar pronto${etaNote}; Lalamove pickup ~${LALAMOVE_PICKUP_MIN}min (R$ ${p.lalamoveCost!.toFixed(2)})`
         : `Urgente — nenhum motorista disponível; Lalamove (R$ ${p.lalamoveCost!.toFixed(2)})`,
     };
   }
@@ -354,7 +376,13 @@ export async function makeFreightDecision(
     .sort((a, b) => b.score - a.score);
 
   const bestDriver = ranked[0]
-    ? { id: ranked[0].driverId, name: ranked[0].driverName, score: ranked[0].score, minutesUntilFree: ranked[0].minutesUntilFree }
+    ? {
+        id:               ranked[0].driverId,
+        name:             ranked[0].driverName,
+        score:            ranked[0].score,
+        minutesUntilFree: ranked[0].minutesUntilFree,
+        etaToOriginMin:   ranked[0].etaToOriginMin,
+      }
     : null;
 
   // 6. Cotação Lalamove (não bloqueia em caso de erro)
