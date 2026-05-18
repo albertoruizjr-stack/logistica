@@ -52,8 +52,16 @@ export default async function CotacaoPage() {
                     <p className="text-sm font-semibold text-gray-900">
                       {formatCurrency(zone.basePrice)}
                     </p>
+                    {/* Express usa expressBasePrice absoluto (tabela 2026-05-13).
+                        Fallback pra zonas legadas sem expressBasePrice continua mostrando
+                        basePrice × urgentFactor pra não quebrar histórico visual. */}
                     <p className="text-xs text-red-600">
-                      Urgente: {formatCurrency(zone.basePrice * zone.urgentFactor)}
+                      Express:{" "}
+                      {formatCurrency(
+                        zone.expressBasePrice != null && zone.expressBasePrice > 0
+                          ? zone.expressBasePrice
+                          : zone.basePrice * zone.urgentFactor
+                      )}
                     </p>
                   </div>
                 ) : (
@@ -63,7 +71,7 @@ export default async function CotacaoPage() {
             ))}
           </div>
           <p className="text-xs text-gray-400 mt-4">
-            * Urgente usa multiplicador de {zones[0]?.urgentFactor ?? 1.8}×
+            * Express usa valor absoluto por zona (tabela atualizada — sem multiplicador).
           </p>
         </div>
       </div>

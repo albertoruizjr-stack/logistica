@@ -141,8 +141,23 @@ export async function calculateFreightQuote(
     };
   }
 
-  let suggestedPrice = zone.basePrice;
-  if (mapping.isUrgent) suggestedPrice = suggestedPrice * urgentFactor;
+  // Tabela nova (2026-05-13): cada zona tem basePrice (normal) e expressBasePrice
+  // (urgent) como valores absolutos. Lê direto, sem multiplicador.
+  // Fallback: zonas legadas sem expressBasePrice continuam usando basePrice × urgentFactor
+  // pra preservar compat — mas todas as zonas ativas hoje têm expressBasePrice setado.
+  let suggestedPrice: number;
+  let appliedUrgentFactor: number | null = null;
+
+  if (mapping.isUrgent) {
+    if (zone.expressBasePrice != null && zone.expressBasePrice > 0) {
+      suggestedPrice = zone.expressBasePrice;
+    } else {
+      suggestedPrice = zone.basePrice * urgentFactor;
+      appliedUrgentFactor = urgentFactor;
+    }
+  } else {
+    suggestedPrice = zone.basePrice;
+  }
 
   // para SCHEDULED: estimatedDays calculado pela data escolhida
   let estimatedDays = mapping.estimatedDays;
@@ -167,7 +182,9 @@ export async function calculateFreightQuote(
     zone,
     suggestedPrice,
     isUrgent:            mapping.isUrgent,
-    urgentFactor:        mapping.isUrgent ? urgentFactor : null,
+    // urgentFactor só é preenchido no fallback legado; tabela nova devolve null
+    // porque o preço express é absoluto (não há multiplicador a exibir na UI).
+    urgentFactor:        appliedUrgentFactor,
     estimatedDays,
     deliveryType:        mapping.deliveryType,
     deliveryOption,
