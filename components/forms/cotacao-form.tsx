@@ -242,9 +242,14 @@ export function FreightQuoteForm({ stores, sessionStoreId }: Props) {
   const [excecaoReason, setExcecaoReason]         = useState("");
   const [showExcecaoInput, setShowExcecaoInput]   = useState(false);
   const [deliveryOption, setDeliveryOption]       = useState<DeliveryOption>("TOMORROW_FIRST");
-  // Veículo para EXPRESS: moto cota direto Lalamove (mais barato);
-  // carro/van cai na tabela express por zona.
-  const [expressVehicle, setExpressVehicle]       = useState<"MOTORCYCLE" | "CAR">("CAR");
+  // Veículo para EXPRESS: serviceType da Lalamove BR (catálogo 2026).
+  //   LALAPRO    →  Moto com baú        (até 20 kg)
+  //   UV_FIORINO →  Utilitário (Fiorino) (até 500 kg)
+  //   VAN        →  Van média            (até 1.000 kg)
+  //   TRUCK330   →  Caminhão / Carreto   (até 1.500 kg)
+  //   TRUCK3_5T  →  Caminhão 2.5t        (até 2.500 kg)
+  type ExpressVehicle = "LALAPRO" | "UV_FIORINO" | "VAN" | "TRUCK330" | "TRUCK3_5T";
+  const [expressVehicle, setExpressVehicle]       = useState<ExpressVehicle>("LALAPRO");
   const [pendingCalculate, setPendingCalculate]   = useState(false);
 
   const addressInputRef  = useRef<HTMLInputElement | null>(null);
@@ -710,42 +715,39 @@ export function FreightQuoteForm({ stores, sessionStoreId }: Props) {
                 </div>
               )}
 
-              {/* Veículo p/ entrega expressa: moto cota direto Lalamove (mais barato) */}
+              {/* Veículo p/ entrega expressa: cada opção cota direto na Lalamove */}
               {deliveryOption === "EXPRESS" && (
                 <div className="mt-3">
                   <label className="text-xs text-gray-600 mb-2 block font-medium">
                     Tipo de veículo
                   </label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setExpressVehicle("MOTORCYCLE")}
-                      className={cn(
-                        "px-3 py-2.5 rounded-lg border text-sm font-medium transition flex items-center justify-center gap-2",
-                        expressVehicle === "MOTORCYCLE"
-                          ? "border-orange-500 bg-orange-50 text-orange-700"
-                          : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
-                      )}
-                    >
-                      🏍️ Moto
-                      <span className="text-[10px] text-gray-500 font-normal">cotação Lalamove</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setExpressVehicle("CAR")}
-                      className={cn(
-                        "px-3 py-2.5 rounded-lg border text-sm font-medium transition flex items-center justify-center gap-2",
-                        expressVehicle === "CAR"
-                          ? "border-orange-500 bg-orange-50 text-orange-700"
-                          : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
-                      )}
-                    >
-                      🚐 Carro/Van
-                      <span className="text-[10px] text-gray-500 font-normal">tabela express</span>
-                    </button>
+                  <div className="grid grid-cols-1 sm:grid-cols-5 gap-2">
+                    {[
+                      { id: "LALAPRO",   emoji: "🏍️", label: "Moto",       cap: "até 20 kg" },
+                      { id: "UV_FIORINO", emoji: "🚐", label: "Utilitário", cap: "até 500 kg" },
+                      { id: "VAN",       emoji: "🚙", label: "Van",        cap: "até 1 t" },
+                      { id: "TRUCK330",  emoji: "🚚", label: "Carreto",    cap: "até 1,5 t" },
+                      { id: "TRUCK3_5T", emoji: "🚛", label: "Caminhão",   cap: "até 2,5 t" },
+                    ].map((v) => (
+                      <button
+                        key={v.id}
+                        type="button"
+                        onClick={() => setExpressVehicle(v.id as ExpressVehicle)}
+                        className={cn(
+                          "px-2 py-2 rounded-lg border text-xs font-medium transition flex flex-col items-center gap-0.5",
+                          expressVehicle === v.id
+                            ? "border-orange-500 bg-orange-50 text-orange-700"
+                            : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+                        )}
+                      >
+                        <span className="text-base leading-none">{v.emoji}</span>
+                        <span>{v.label}</span>
+                        <span className="text-[9px] text-gray-500 font-normal">{v.cap}</span>
+                      </button>
+                    ))}
                   </div>
                   <p className="text-[10px] text-gray-400 mt-1.5">
-                    Moto vale pra pacotes leves (até 20 kg) sem lata grande ou papelão.
+                    Cotação em tempo real direto no Lalamove. Escolha o menor veículo que comporta a carga.
                   </p>
                 </div>
               )}

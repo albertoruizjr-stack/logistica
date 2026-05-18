@@ -64,7 +64,7 @@ describe("classifyVehicle", () => {
   it("100 kg → FIORINO interno, UTILITARIO Lalamove", () => {
     const r = classifyVehicle([{ productCode: "T01", quantity: 2, weightKg: 50 }], defaultVehicleConfig);
     expect(r.internalVehicle).toBe(InternalVehicleType.FIORINO);
-    expect(r.lalamoveVehicle).toBe(LalamoveServiceType.UTILITARIO);
+    expect(r.lalamoveVehicle).toBe(LalamoveServiceType.UV_FIORINO);
     expect(r.totalWeightKg).toBe(100);
   });
 
@@ -198,7 +198,7 @@ describe("decideBestDeliveryOption", () => {
   it("regra 0: same-day após 12h + Lalamove disponível → LALAMOVE express", () => {
     const r = decideBestDeliveryOption({
       internalVehicle: InternalVehicleType.FIORINO,
-      lalamoveVehicle: LalamoveServiceType.UTILITARIO,
+      lalamoveVehicle: LalamoveServiceType.UV_FIORINO,
       bestDriver: mockDriver,
       internalCost: 50,
       lalamoveCost: 80,
@@ -213,7 +213,7 @@ describe("decideBestDeliveryOption", () => {
   it("regra 1: urgente com motorista ocupado > 20 min → LALAMOVE", () => {
     const r = decideBestDeliveryOption({
       internalVehicle: InternalVehicleType.FIORINO,
-      lalamoveVehicle: LalamoveServiceType.UTILITARIO,
+      lalamoveVehicle: LalamoveServiceType.UV_FIORINO,
       bestDriver: mockDriverBusy,
       internalCost: 50,
       lalamoveCost: 40,
@@ -228,7 +228,7 @@ describe("decideBestDeliveryOption", () => {
   it("regra 2: motorista livre com score >= 60 e mais barato → INTERNAL", () => {
     const r = decideBestDeliveryOption({
       internalVehicle: InternalVehicleType.FIORINO,
-      lalamoveVehicle: LalamoveServiceType.UTILITARIO,
+      lalamoveVehicle: LalamoveServiceType.UV_FIORINO,
       bestDriver: mockDriver,
       internalCost: 35,
       lalamoveCost: 40,
@@ -243,7 +243,7 @@ describe("decideBestDeliveryOption", () => {
   it("regra 2: Lalamove >10% mais barato → LALAMOVE", () => {
     const r = decideBestDeliveryOption({
       internalVehicle: InternalVehicleType.FIORINO,
-      lalamoveVehicle: LalamoveServiceType.UTILITARIO,
+      lalamoveVehicle: LalamoveServiceType.UV_FIORINO,
       bestDriver: { id: "d1", name: "João", score: 70, minutesUntilFree: 0 },
       internalCost: 60,
       lalamoveCost: 30,  // 50% mais barato
@@ -257,7 +257,7 @@ describe("decideBestDeliveryOption", () => {
   it("regra 4: nenhum motorista com score suficiente → LALAMOVE", () => {
     const r = decideBestDeliveryOption({
       internalVehicle: InternalVehicleType.FIORINO,
-      lalamoveVehicle: LalamoveServiceType.UTILITARIO,
+      lalamoveVehicle: LalamoveServiceType.UV_FIORINO,
       bestDriver: null,
       internalCost: 35,
       lalamoveCost: 40,
@@ -271,7 +271,7 @@ describe("decideBestDeliveryOption", () => {
   it("regra 5: Lalamove indisponível → INTERNAL", () => {
     const r = decideBestDeliveryOption({
       internalVehicle: InternalVehicleType.FIORINO,
-      lalamoveVehicle: LalamoveServiceType.UTILITARIO,
+      lalamoveVehicle: LalamoveServiceType.UV_FIORINO,
       bestDriver: mockDriver,
       internalCost: 35,
       lalamoveCost: null,
@@ -286,7 +286,7 @@ describe("decideBestDeliveryOption", () => {
   it("regra 6: nenhum recurso → INTERNAL com requiresManualAssignment", () => {
     const r = decideBestDeliveryOption({
       internalVehicle: InternalVehicleType.FIORINO,
-      lalamoveVehicle: LalamoveServiceType.UTILITARIO,
+      lalamoveVehicle: LalamoveServiceType.UV_FIORINO,
       bestDriver: null,
       internalCost: 35,
       lalamoveCost: null,
@@ -301,7 +301,7 @@ describe("decideBestDeliveryOption", () => {
   it("D+1 com motorista bom inclui consolidationNote", () => {
     const r = decideBestDeliveryOption({
       internalVehicle: InternalVehicleType.FIORINO,
-      lalamoveVehicle: LalamoveServiceType.UTILITARIO,
+      lalamoveVehicle: LalamoveServiceType.UV_FIORINO,
       bestDriver: mockDriver,
       internalCost: 35,
       lalamoveCost: 36,   // custo similar — interno vence

@@ -90,18 +90,20 @@ export const DISPATCH_MODAL_LABELS: Record<string, string> = {
   EXCEPTION: "Exceção Operacional",
 };
 
-// Lalamove — tipo de serviço no Brasil
-export const LALAMOVE_SERVICE_TYPE = "MOTORCYCLE";
+// Lalamove — tipo de serviço default no Brasil (códigos atualizados 2026).
+// Antigo "MOTORCYCLE" foi descontinuado; o equivalente é LALAPRO (moto com baú).
+export const LALAMOVE_SERVICE_TYPE = "LALAPRO";
 export const LALAMOVE_API_BASE_URL = "https://rest.lalamove.com";
-export const LALAMOVE_SANDBOX_URL = "https://sandbox-rest.lalamove.com";
+// Sandbox URL corrigida: oficial é "rest.sandbox.lalamove.com" (não "sandbox-rest.lalamove.com")
+export const LALAMOVE_SANDBOX_URL = "https://rest.sandbox.lalamove.com";
 
-// Motor de Decisão de Frete — mapeamento de nome interno → código API Lalamove
+// Motor de Decisão — identity map (códigos internos = códigos da API agora).
 export const LALAMOVE_VEHICLE_MAP: Record<keyof typeof LalamoveServiceType, string> = {
-  LALAPRO:    "MOTORCYCLE",
-  UTILITARIO: "VAN",
-  VAN:        "VAN_L",
-  CARRETO:    "MOVING_TRUCK",
-  CAMINHAO:   "TRUCK",
+  LALAPRO:    "LALAPRO",
+  UV_FIORINO: "UV_FIORINO",
+  VAN:        "VAN",
+  TRUCK330:   "TRUCK330",
+  TRUCK3_5T:  "TRUCK3_5T",
 }
 
 // Margem por tipo de veículo interno: precoBase = MAX(zona, custo × margem)

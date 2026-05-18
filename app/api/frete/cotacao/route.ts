@@ -6,7 +6,8 @@ import { getSessionFromRequest } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/types";
 
 const DELIVERY_OPTIONS = ["SAME_DAY", "TOMORROW_FIRST", "TOMORROW_SECOND", "EXPRESS", "SCHEDULED"] as const;
-const EXPRESS_VEHICLES = ["MOTORCYCLE", "CAR"] as const;
+// ServiceTypes oficiais Lalamove BR (2026) — todos cotam direto na API deles.
+const EXPRESS_VEHICLES = ["LALAPRO", "UV_FIORINO", "VAN", "TRUCK330", "TRUCK3_5T"] as const;
 
 const schema = z.object({
   storeId:        z.string(),
@@ -57,30 +58,40 @@ export async function POST(req: NextRequest) {
 
     let result = await calculateFreightQuote(data);
 
-    // Express + Moto: tenta cotação direta no Lalamove (mais barato em pacotes leves).
-    // Se a chamada falhar (502, sem creds, timeout), cai pra tabela express com aviso.
-    let lalamoveQuoteSource: "LALAMOVE_MOTORCYCLE" | null = null;
+    // EXPRESS: para QUALQUER veículo escolhido, cota direto no Lalamove.
+    // Cada serviceType (LALAPRO, UV_FIORINO, VAN, TRUCK330, TRUCK3_5T) tem
+    // preço próprio na frota Lalamove. Se a chamada falhar, cai pra tabela
+    // express com aviso (lalamoveWarning) que a UI pode exibir.
+    const LABELS: Record<string, string> = {
+      LALAPRO:    "Moto (LalaPro)",
+      UV_FIORINO: "Utilitário Fiorino",
+      VAN:        "Van",
+      TRUCK330:   "Carreto",
+      TRUCK3_5T:  "Caminhão 2,5t",
+    };
+    let lalamoveQuoteSource: string | null = null;
     let lalamoveWarning: string | undefined;
-    if (data.deliveryOption === "EXPRESS" && data.expressVehicle === "MOTORCYCLE") {
+    if (data.deliveryOption === "EXPRESS" && data.expressVehicle) {
       try {
         const quote = await getLalamoveQuote(
           { coordinates: { lat: String(data.originLat), lng: String(data.originLng) }, address: data.originAddress },
           { coordinates: { lat: String(data.destLat),   lng: String(data.destLng)   }, address: data.destAddress },
           true,
-          "MOTORCYCLE",
+          data.expressVehicle,
         );
         if ("reason" in quote) {
           lalamoveWarning = `Lalamove indisponível: ${quote.reason}. Usando tabela express.`;
         } else {
           const total = parseFloat(quote.priceBreakdown.total);
           if (total > 0) {
+            const label = LABELS[data.expressVehicle] ?? data.expressVehicle;
             result = {
               ...result,
               suggestedPrice:      total,
               urgentFactor:        null,
-              dispatchWindowLabel: "Entrega expressa — Lalamove Moto",
+              dispatchWindowLabel: `Entrega expressa — Lalamove ${label}`,
             };
-            lalamoveQuoteSource = "LALAMOVE_MOTORCYCLE";
+            lalamoveQuoteSource = `LALAMOVE_${data.expressVehicle}`;
           } else {
             lalamoveWarning = "Lalamove retornou cotação zerada. Usando tabela express.";
           }

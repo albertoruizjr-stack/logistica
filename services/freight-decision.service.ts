@@ -52,13 +52,18 @@ export function classifyVehicle(
     internalVehicle = "EXCEPTION";
   }
 
-  // Lalamove: apenas peso
+  // Lalamove: apenas peso. Mapa atualizado pros serviceTypes BR 2026.
+  //   LALAPRO    →  20 kg
+  //   UV_FIORINO → 500 kg (era UTILITARIO)
+  //   VAN        → 1000 kg
+  //   TRUCK330   → 1500 kg (era CARRETO)
+  //   TRUCK3_5T  → 2500 kg (era CAMINHAO)
   let lalamoveVehicle: LalamoveServiceType | "EXCEPTION";
   if      (totalWeightKg <= config.LALA_LALAPRO_MAX_KG)    lalamoveVehicle = LalamoveServiceType.LALAPRO;
-  else if (totalWeightKg <= config.LALA_UTILITARIO_MAX_KG) lalamoveVehicle = LalamoveServiceType.UTILITARIO;
+  else if (totalWeightKg <= config.LALA_UTILITARIO_MAX_KG) lalamoveVehicle = LalamoveServiceType.UV_FIORINO;
   else if (totalWeightKg <= config.LALA_VAN_MAX_KG)        lalamoveVehicle = LalamoveServiceType.VAN;
-  else if (totalWeightKg <= config.LALA_CARRETO_MAX_KG)    lalamoveVehicle = LalamoveServiceType.CARRETO;
-  else if (totalWeightKg <= config.LALA_CAMINHAO_MAX_KG)   lalamoveVehicle = LalamoveServiceType.CAMINHAO;
+  else if (totalWeightKg <= config.LALA_CARRETO_MAX_KG)    lalamoveVehicle = LalamoveServiceType.TRUCK330;
+  else if (totalWeightKg <= config.LALA_CAMINHAO_MAX_KG)   lalamoveVehicle = LalamoveServiceType.TRUCK3_5T;
   else                                                      lalamoveVehicle = "EXCEPTION";
 
   return { internalVehicle, lalamoveVehicle, totalWeightKg, totalLatas };
@@ -399,7 +404,7 @@ export async function makeFreightDecision(
         coordinates: { lat: String(input.destLat), lng: String(input.destLng) },
         address: "",
       };
-      // cargo.lalamoveVehicle já é o código da API (ex: "MOTORCYCLE", "VAN")
+      // cargo.lalamoveVehicle já é o código da API (ex: "LALAPRO", "VAN", "TRUCK330")
       const serviceType = cargo.lalamoveVehicle;
       const quote = await getLalamoveQuote(origin, dest, input.isUrgent, serviceType);
       if (!("reason" in quote)) {

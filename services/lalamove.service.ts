@@ -55,9 +55,14 @@ function buildHeaders(method: string, path: string, body: string = ""): HeadersI
   const timestamp = Date.now().toString();
   const signature = generateSignature(apiSecret, timestamp, method, path, body);
 
+  // Formato OFICIAL da Lalamove v3 (developers.lalamove.com):
+  //   TOKEN = API_KEY:TIMESTAMP:SIGNATURE   ← separador ":"
+  //   Authorization: hmac <TOKEN>
+  // O formato antigo `hmac id="x", ts="y", sign="z"` é rejeitado pelo gateway
+  // APISIX deles, devolvendo HTTP 502 sem chegar no backend.
   return {
-    "Content-Type": "application/json; charset=utf-8",
-    Authorization: `hmac id="${apiKey}", ts="${timestamp}", sign="${signature}"`,
+    "Content-Type": "application/json",
+    Authorization: `hmac ${apiKey}:${timestamp}:${signature}`,
     Market: market,
     "Request-ID": crypto.randomUUID(),
   };
@@ -76,7 +81,8 @@ export async function getLalamoveQuote(
   if (!isLalamoveConfigured()) return NOT_CONFIGURED;
 
   const path = "/v3/quotations";
-  const body: LalamoveQuoteRequest = {
+  // Lalamove v3 exige wrapper { "data": { ... } }
+  const innerBody: LalamoveQuoteRequest = {
     language: "pt_BR",
     serviceType: serviceType,
     specialRequests: [],
@@ -89,7 +95,7 @@ export async function getLalamoveQuote(
     },
   };
 
-  const bodyString = JSON.stringify(body);
+  const bodyString = JSON.stringify({ data: innerBody });
   const response = await fetch(`${getBaseUrl()}${path}`, {
     method: "POST",
     headers: buildHeaders("POST", path, bodyString),
@@ -101,7 +107,9 @@ export async function getLalamoveQuote(
     throw new Error(`Lalamove quotation error ${response.status}: ${error}`);
   }
 
-  return response.json();
+  // Response da v3 também vem com { "data": {...} }
+  const json = await response.json();
+  return json.data ?? json;
 }
 
 // ──────────────────────────────────────────────
@@ -117,7 +125,8 @@ export async function createLalamoveOrder(
   if (!isLalamoveConfigured()) return NOT_CONFIGURED;
 
   const path = "/v3/orders";
-  const body = {
+  // Lalamove v3 também exige wrapper { "data": { ... } } pra criar pedido
+  const innerBody = {
     quotationId,
     sender: {
       stopId: "1",
@@ -135,7 +144,7 @@ export async function createLalamoveOrder(
     isPODEnabled: false,
   };
 
-  const bodyString = JSON.stringify(body);
+  const bodyString = JSON.stringify({ data: innerBody });
   const response = await fetch(`${getBaseUrl()}${path}`, {
     method: "POST",
     headers: buildHeaders("POST", path, bodyString),
@@ -147,7 +156,8 @@ export async function createLalamoveOrder(
     throw new Error(`Lalamove order creation error ${response.status}: ${error}`);
   }
 
-  const data = await response.json();
+  const json = await response.json();
+  const data = json.data ?? json;
   return {
     orderId: data.orderId,
     shareLink: data.shareLink,
@@ -176,7 +186,8 @@ export async function getLalamoveOrderStatus(orderId: string): Promise<{
     throw new Error(`Lalamove status error ${response.status}`);
   }
 
-  const data = await response.json();
+  const json = await response.json();
+  const data = json.data ?? json;
   return {
     status: data.status as LalamoveOrderStatus,
     driverName: data.driverInfo?.name,

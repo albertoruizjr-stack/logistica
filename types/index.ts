@@ -50,14 +50,23 @@ export const InternalVehicleType = {
 } as const
 export type InternalVehicleType = typeof InternalVehicleType[keyof typeof InternalVehicleType]
 
-// Tipos de serviço Lalamove Brasil
-// ATENÇÃO: confirmar os códigos exatos na API Lalamove antes do go-live
+// Tipos de serviço Lalamove Brasil (catálogo SP+Campinas, GET /v3/cities).
+// Atualizado 2026-05-18 — os códigos antigos (MOTORCYCLE, VAN_L, MOVING_TRUCK, TRUCK)
+// foram descontinuados pela Lalamove BR.
+//
+// Capacidades (dimensões em metros, carga em kg):
+//   LALAGO       — 0.3×0.4×0.3   /   20 kg   (moto pequena, descartado pelo negócio)
+//   LALAPRO      — 0.4×0.4×0.3   /   20 kg   (moto com baú)
+//   UV_FIORINO   — 1.8×1.3×1.1   /  500 kg   (utilitário, ideal pra tinta)
+//   VAN          — 2.7×1.8×1.6   / 1000 kg   (van média)
+//   TRUCK330     — 3×1.8×2       / 1500 kg   (caminhão pequeno / carreto)
+//   TRUCK3_5T    — 4×2.2×2.2     / 2500 kg   (caminhão 2.5t)
 export const LalamoveServiceType = {
-  LALAPRO:    "MOTORCYCLE",
-  UTILITARIO: "VAN",
-  VAN:        "VAN_L",
-  CARRETO:    "MOVING_TRUCK",
-  CAMINHAO:   "TRUCK",
+  LALAPRO:    "LALAPRO",
+  UV_FIORINO: "UV_FIORINO",
+  VAN:        "VAN",
+  TRUCK330:   "TRUCK330",
+  TRUCK3_5T:  "TRUCK3_5T",
 } as const
 export type LalamoveServiceType = typeof LalamoveServiceType[keyof typeof LalamoveServiceType]
 
