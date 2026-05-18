@@ -534,13 +534,25 @@ export function SolicitacaoDetailDrawer({ requestId, onClose }: Props) {
                 const NEXT_ACTION: Record<string, { label: string; toStatus: string }> = {
                   PENDING:             { label: "Confirmar separação",     toStatus: "SEPARADO"            },
                   AWAITING_TRANSFER:   { label: "Seguir para Separação",   toStatus: "SEPARADO"            },
-                  SEPARADO:            { label: "Solicitar NF ao CD",      toStatus: "AGUARDANDO_NF"       },
+                  // SEPARADO renderiza bloco especial (aguardando NF automática), não botão.
+                  // Por isso não está mais aqui — cai no fallback que mostra o bloco custom abaixo.
                   AGUARDANDO_NF:       { label: "NF emitida no Citel",     toStatus: "NF_VINCULADA"        },
                   NF_VINCULADA:        { label: "Liberar para Roteirização", toStatus: "PRONTO_ROTEIRIZACAO" },
                   PRONTO_ROTEIRIZACAO: { label: "Roteirizar",              toStatus: "ROTEIRIZADO"         },
                   ROTEIRIZADO:         { label: "Despachar",               toStatus: "DISPATCHED"          },
                   IN_TRANSIT:          { label: "Confirmar Entrega",       toStatus: "DELIVERED"           },
                 };
+                // Estado SEPARADO: NF é vinculada automaticamente pelo cron Citel.
+                // Mostramos bloco passivo + botão "Verificar agora" pra forçar imediato.
+                if (data.status === "SEPARADO") {
+                  return (
+                    <SeparadoAutoNfBlock
+                      deliveryRequestId={data.id}
+                      onLinked={() => loadData(data.id)}
+                    />
+                  );
+                }
+
                 const action = NEXT_ACTION[data.status];
                 if (!action) return null;
 
@@ -1144,5 +1156,94 @@ function StatBox({ icon: Icon, label, value, color }: { icon: typeof User; label
         <p className="text-[12px] font-bold leading-tight" style={{ color: "var(--color-body-text)" }}>{value}</p>
       </div>
     </div>
+  );
+}
+
+// ─── Bloco "Aguardando NF (automática)" ─────────────────────────────
+// Mostrado quando a DR está em SEPARADO. O cron Citel vincula a NF e promove
+// o status sem intervenção. Botão "Verificar agora" força check imediato.
+function SeparadoAutoNfBlock({
+  deliveryRequestId,
+  onLinked,
+}: {
+  deliveryRequestId: string;
+  onLinked: () => void;
+}) {
+  const [checking, setChecking] = useState(false);
+  const [feedback, setFeedback] = useState<{ kind: "ok" | "info" | "error"; message: string } | null>(null);
+
+  async function handleCheck() {
+    setChecking(true);
+    setFeedback(null);
+    try {
+      const res = await fetch(`/api/solicitacoes/${deliveryRequestId}/check-nf`, { method: "POST" });
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        setFeedback({ kind: "error", message: json.error ?? "Erro ao verificar NF" });
+        return;
+      }
+      const r = json.data as { type: string; invoiceNumber?: string; message?: string };
+      if (r.type === "linked") {
+        setFeedback({ kind: "ok", message: `NF ${r.invoiceNumber} vinculada — liberando para roteirização` });
+        // Pequeno delay pra o usuário ver a mensagem, depois recarrega o detalhe
+        setTimeout(onLinked, 1200);
+      } else {
+        setFeedback({ kind: "info", message: r.message ?? "Sem NF disponível ainda" });
+      }
+    } catch (e) {
+      setFeedback({ kind: "error", message: e instanceof Error ? e.message : "Erro de rede" });
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  return (
+    <section>
+      <p className="text-[10.5px] font-semibold uppercase mb-1.5"
+         style={{ letterSpacing: "0.10em", color: "var(--color-muted-text)" }}>
+        Próxima ação
+      </p>
+      <div className="rounded-lg px-3.5 py-3"
+           style={{ backgroundColor: "rgba(99,102,241,0.06)", border: "1px solid rgba(99,102,241,0.20)" }}>
+        <div className="flex items-start gap-2.5 mb-2">
+          <Receipt className="w-4 h-4 mt-0.5 flex-shrink-0" style={{ color: "rgb(99,102,241)" }} />
+          <div className="min-w-0">
+            <p className="text-[12.5px] font-semibold" style={{ color: "var(--color-body-text)" }}>
+              Aguardando NF do Citel
+            </p>
+            <p className="text-[11px] mt-0.5" style={{ color: "var(--color-muted-text)" }}>
+              O sistema vincula a NF e libera para roteirização automaticamente assim que ela for emitida.
+            </p>
+          </div>
+        </div>
+        <button
+          onClick={handleCheck}
+          disabled={checking}
+          className="w-full flex items-center justify-center gap-1.5 text-[12px] font-semibold py-2 rounded-md disabled:opacity-60"
+          style={{ backgroundColor: "white", border: "1px solid rgba(99,102,241,0.30)", color: "rgb(79,70,229)" }}
+        >
+          {checking
+            ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Consultando Citel…</>
+            : <><RefreshCw className="w-3.5 h-3.5" /> Verificar NF agora</>}
+        </button>
+        {feedback && (
+          <p
+            className="text-[11px] mt-2 px-2 py-1.5 rounded"
+            style={{
+              backgroundColor:
+                feedback.kind === "ok"    ? "rgba(34,197,94,0.10)" :
+                feedback.kind === "error" ? "rgba(239,68,68,0.10)" :
+                                            "rgba(99,102,241,0.08)",
+              color:
+                feedback.kind === "ok"    ? "rgb(21,128,61)"   :
+                feedback.kind === "error" ? "rgb(185,28,28)"   :
+                                            "var(--color-body-text)",
+            }}
+          >
+            {feedback.message}
+          </p>
+        )}
+      </div>
+    </section>
   );
 }

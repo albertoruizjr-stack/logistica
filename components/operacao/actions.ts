@@ -91,8 +91,11 @@ export const ACTIONS_BY_STATUS: Record<string, ActionDefinition[]> = {
     CANCEL_ACTION,
   ],
 
+  // A partir de SEPARADO, o cron do Citel vincula a NF automaticamente e promove
+  // o status até PRONTO_ROTEIRIZACAO sem intervenção do operador. O fallback
+  // manual ("Solicitar NF ao CD") fica disponível na página completa caso o
+  // cron falhe — mas não aparece como ação principal aqui.
   [DeliveryRequestStatus.SEPARADO]: [
-    { toStatus: DeliveryRequestStatus.AGUARDANDO_NF, label: "Solicitar NF ao CD",  variant: "primary" },
     OCORRENCIA_ACTION,
     CANCEL_ACTION,
   ],

@@ -39,7 +39,9 @@ export const ALLOWED_TRANSITIONS: Record<DeliveryRequestStatus, DeliveryRequestS
   [S.AWAITING_ITEMS]:      [S.PENDING, S.AWAITING_TRANSFER, S.SEPARADO, S.CANCELLED, S.OCORRENCIA],
   [S.AWAITING_TRANSFER]:   [S.SEPARADO, S.AWAITING_ITEMS, S.CANCELLED, S.OCORRENCIA],
   // Fase fiscal
-  [S.SEPARADO]:            [S.AGUARDANDO_NF, S.CANCELLED, S.OCORRENCIA],
+  // SEPARADO → NF_VINCULADA é o caminho novo: cron Citel vincula NF automaticamente
+  // e dispara as transições. AGUARDANDO_NF mantido como fallback manual.
+  [S.SEPARADO]:            [S.NF_VINCULADA, S.AGUARDANDO_NF, S.CANCELLED, S.OCORRENCIA],
   // Etapa NF unificada: "NF emitida no Citel" leva direto pra NF_VINCULADA.
   [S.AGUARDANDO_NF]:       [S.NF_VINCULADA, S.NF_EMITIDA, S.CANCELLED, S.OCORRENCIA],
   // NF_EMITIDA mantida só pra registros antigos — pode evoluir para NF_VINCULADA.

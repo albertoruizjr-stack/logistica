@@ -22,6 +22,37 @@ import {
   upsertNfLinkAlert,
   resolveNfLinkAlert,
 } from "./torre/alert-engine.service";
+import { transitionDeliveryRequest } from "./state-machine.service";
+import { DeliveryRequestStatus } from "@prisma/client";
+
+// Status em que faz sentido avançar automaticamente após vincular a NF.
+// PENDING/AWAITING_* não estão aqui — DRs ainda não separadas precisam de ação do estoquista.
+const AUTO_PROMOTABLE_STATUSES = new Set<DeliveryRequestStatus>([
+  DeliveryRequestStatus.SEPARADO,
+  DeliveryRequestStatus.AGUARDANDO_NF,
+  DeliveryRequestStatus.NF_EMITIDA,
+]);
+
+// Usuário "sistema" para registrar auditoria das transições automáticas
+const SYSTEM_USER_EMAIL = "sistema@mestredapintura.com.br";
+let systemUserIdCache: string | null = null;
+async function getSystemUserId(): Promise<string | null> {
+  if (systemUserIdCache) return systemUserIdCache;
+  const user = await prisma.user.findFirst({
+    where:  { email: SYSTEM_USER_EMAIL },
+    select: { id: true },
+  });
+  if (user) systemUserIdCache = user.id;
+  // Fallback: pega o primeiro admin se o usuário "sistema" não existir
+  if (!systemUserIdCache) {
+    const admin = await prisma.user.findFirst({
+      where:  { role: "ADMIN", active: true },
+      select: { id: true },
+    });
+    if (admin) systemUserIdCache = admin.id;
+  }
+  return systemUserIdCache;
+}
 
 // Após quantas horas o fallback individual começa a tentar (batch deveria pegar antes)
 const FALLBACK_THRESHOLD_H = 2;
@@ -145,7 +176,7 @@ async function applyLink(
       }
     }
 
-    await prisma.deliveryRequest.update({
+    const updated = await prisma.deliveryRequest.update({
       where: { id: requestId },
       data: {
         invoiceNumber,
@@ -154,12 +185,50 @@ async function applyLink(
         nfLinkAttemptCount:  0,
         nfLinkError:         null,
       },
+      select: { id: true, status: true },
     });
+
+    // Auto-promoção: depois de vincular a NF, avança o status sem operador clicar.
+    // SEPARADO → NF_VINCULADA → PRONTO_ROTEIRIZACAO no mesmo passo.
+    // Idempotente: se já está em status posterior, não faz nada.
+    if (AUTO_PROMOTABLE_STATUSES.has(updated.status)) {
+      await autoPromoteAfterLink(updated.id).catch((err) => {
+        console.error(`[nf-link] auto-promoção falhou para DR ${updated.id}`, err);
+      });
+    }
 
     return "linked";
   } catch {
     return "error";
   }
+}
+
+// Executa as transições SEPARADO/AGUARDANDO_NF/NF_EMITIDA → NF_VINCULADA → PRONTO_ROTEIRIZACAO
+// usando o usuário "sistema" pra auditoria.
+async function autoPromoteAfterLink(requestId: string): Promise<void> {
+  const systemId = await getSystemUserId();
+  if (!systemId) {
+    console.warn("[nf-link] sem usuário sistema/admin pra auto-promover DR", requestId);
+    return;
+  }
+
+  // 1. NF_VINCULADA — gate já passa (invoiceNumber acabou de ser gravado)
+  await transitionDeliveryRequest({
+    requestId,
+    actorId:   systemId,
+    actorRole: "ADMIN",
+    toStatus:  DeliveryRequestStatus.NF_VINCULADA,
+    metadata:  { reason: "NF vinculada automaticamente pelo cron Citel" },
+  });
+
+  // 2. PRONTO_ROTEIRIZACAO — operador não precisa mais clicar "Liberar roteirização"
+  await transitionDeliveryRequest({
+    requestId,
+    actorId:   systemId,
+    actorRole: "ADMIN",
+    toStatus:  DeliveryRequestStatus.PRONTO_ROTEIRIZACAO,
+    metadata:  { reason: "Liberada para roteirização automaticamente após vínculo de NF" },
+  });
 }
 
 // ──────────────────────────────────────────────
@@ -413,4 +482,69 @@ export async function runNfLinkJob(
     requestsNotFound: notFound, requestsError: errors,
     durationMs: Date.now() - start, skipped: false,
   };
+}
+
+// ──────────────────────────────────────────────
+// VERIFICAÇÃO INDIVIDUAL — usada pelo botão "Verificar NF agora" no detalhe da DR.
+// Não passa pelo batch; consulta direto o PD no Citel e aplica o resultado.
+// Retorna o status final + mensagem amigável pra UI exibir.
+// ──────────────────────────────────────────────
+
+export type SingleCheckResult =
+  | { type: "linked";   invoiceNumber: string }
+  | { type: "partial";  message: string }
+  | { type: "multi_nf"; message: string }
+  | { type: "not_found"; message: string }
+  | { type: "cancelled"; message: string }
+  | { type: "no_order";  message: string }
+  | { type: "error";     message: string };
+
+export async function checkSingleRequest(requestId: string): Promise<SingleCheckResult> {
+  const req = await prisma.deliveryRequest.findUnique({
+    where:  { id: requestId },
+    select: {
+      id: true, orderNumber: true, invoiceNumber: true,
+      orderStore: { select: { code: true } },
+    },
+  });
+
+  if (!req) return { type: "error", message: "Solicitação não encontrada" };
+  if (req.invoiceNumber) {
+    return { type: "linked", invoiceNumber: req.invoiceNumber };
+  }
+  if (!req.orderNumber || !req.orderStore?.code) {
+    return { type: "no_order", message: "Solicitação sem número de PD vinculado" };
+  }
+
+  const pedido = await fetchPedidoFaturamento(req.orderNumber, req.orderStore.code);
+  if (!pedido) {
+    await prisma.deliveryRequest.update({
+      where: { id: req.id },
+      data:  { nfLinkLastAttemptAt: new Date(), nfLinkAttemptCount: { increment: 1 } },
+    });
+    return { type: "not_found", message: "PD ainda não encontrado no Citel — tente em alguns minutos" };
+  }
+  if (pedido.cancelado) {
+    await prisma.deliveryRequest.update({
+      where: { id: req.id },
+      data:  { nfLinkLastAttemptAt: new Date(), nfLinkError: "PD_CANCELLED_IN_CITEL" },
+    });
+    return { type: "cancelled", message: "PD foi cancelado no Citel" };
+  }
+
+  const classification = classifyItens(pedido.itens);
+  const storeCache = new Map<string, string>();
+  const result = await applyLink(req.id, classification, storeCache);
+
+  if (result === "linked") {
+    const updated = await prisma.deliveryRequest.findUnique({
+      where:  { id: req.id },
+      select: { invoiceNumber: true },
+    });
+    return { type: "linked", invoiceNumber: updated?.invoiceNumber ?? "" };
+  }
+  if (result === "partial")  return { type: "partial",  message: "Faturamento parcial — alguns itens ainda não faturados" };
+  if (result === "multi_nf") return { type: "multi_nf", message: "PD tem múltiplas NFs — necessita revisão manual" };
+  if (result === "not_found") return { type: "not_found", message: "PD não tem itens faturados ainda" };
+  return { type: "error", message: "Erro ao consultar Citel" };
 }
