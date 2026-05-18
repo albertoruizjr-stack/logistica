@@ -133,6 +133,11 @@ export function SolicitarEntregaDrawer({
   const [isEditingAddr,  setIsEditingAddr]     = useState(false);
   const [addrOverridden, setAddrOverridden]    = useState(false);
   const [originalAddr,   setOriginalAddr]      = useState<string>("");
+  // endereço sugerido pelo ERP — usado pro banner "Usar endereço do ERP".
+  // Diferente de originalAddr (que é o "endereço antes de o operador editar").
+  const [erpSuggestedAddr, setErpSuggestedAddr] = useState<string>("");
+  // marca que o vendedor decidiu manter o da cotação (não usar o do ERP)
+  const [keepingQuoteAddr, setKeepingQuoteAddr] = useState(false);
   // form
   const [submitError,  setSubmitError]   = useState<string | null>(null);
   const [successData,  setSuccessData]   = useState<{ id: string; orderNumber: string } | null>(null);
@@ -184,6 +189,7 @@ export function SolicitarEntregaDrawer({
     setIsEntregaCD(false); setCodigoEmpresaCD(null);
     setFetchedInMs(null); setCacheHit(false);
     setIsEditingAddr(false); setAddrOverridden(false); setOriginalAddr("");
+    setErpSuggestedAddr(""); setKeepingQuoteAddr(false);
   }
 
   // ─── busca na Citel ───────────────────────────────────────────────────
@@ -219,7 +225,18 @@ export function SolicitarEntregaDrawer({
       const d = json.data;
       if (d.customerName)    setValue("customerName",    d.customerName);
       if (d.customerPhone)   setValue("customerPhone",   d.customerPhone);
-      if (d.deliveryAddressStr) setValue("deliveryAddress", d.deliveryAddressStr);
+
+      // Endereço de entrega: PRIORIZA o que veio da cotação (destAddress).
+      // ERP só preenche se o drawer foi aberto sem cotação (destAddress vazio).
+      // Quando há divergência, mostra banner pro vendedor optar 1-click.
+      const erpAddr = d.deliveryAddressStr ?? "";
+      setErpSuggestedAddr(erpAddr);
+      const hasQuoteAddr = Boolean(destAddress && destAddress.trim().length > 0);
+      if (!hasQuoteAddr && erpAddr) {
+        setValue("deliveryAddress", erpAddr);
+      }
+      // hasQuoteAddr=true → mantém o defaultValues original (endereço da cotação)
+      setKeepingQuoteAddr(hasQuoteAddr && erpAddr.trim() !== destAddress.trim());
 
       setCustomerDoc(d.customerDocument ?? null);
       setCustomerAddrObj(d.customerAddressObj ?? null);
@@ -272,8 +289,19 @@ export function SolicitarEntregaDrawer({
           customerDoc:              customerDoc ?? undefined,
           customerAddressSnapshot:  customerAddrObj ? JSON.stringify(customerAddrObj) : undefined,
           deliveryAddressSnapshot:  deliveryAddrObj ? JSON.stringify(deliveryAddrObj) : undefined,
-          deliveryAddressSource:    addrOverridden ? "MANUAL_OVERRIDE" : (addrSource ?? undefined),
-          deliveryAddressOriginal:  addrOverridden ? originalAddr : undefined,
+          // Prioridade da fonte do endereço: edição manual > cotação > ERP.
+          deliveryAddressSource:    addrOverridden
+            ? "MANUAL_OVERRIDE"
+            : keepingQuoteAddr
+              ? "QUOTE_ADDRESS"
+              : (addrSource ?? undefined),
+          // Quando manteve o da cotação, "original" = endereço sugerido pelo ERP
+          // (pra preservar o que veio do Citel pra auditoria).
+          deliveryAddressOriginal:  addrOverridden
+            ? originalAddr
+            : keepingQuoteAddr
+              ? erpSuggestedAddr
+              : undefined,
           erpOrderStatus:           erpStatus ?? undefined,
           erpOrderValidationStatus: validationStatus ?? undefined,
         }),
@@ -601,6 +629,38 @@ export function SolicitarEntregaDrawer({
                                 <Edit3 className="w-2.5 h-2.5" /> Editar
                               </button>
                             </div>
+
+                            {/* Banner: cotação tem endereço, ERP retornou outro — vendedor escolhe 1-clique. */}
+                            {keepingQuoteAddr && !isEditingAddr && (
+                              <div className="mb-2 rounded-lg border px-2.5 py-2"
+                                   style={{ backgroundColor: "rgba(250,204,21,0.08)", borderColor: "rgba(202,138,4,0.30)" }}>
+                                <div className="flex items-start gap-1.5 mb-1.5">
+                                  <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" style={{ color: "#CA8A04" }} />
+                                  <p className="text-[10.5px] font-bold uppercase" style={{ color: "#854D0E", letterSpacing: "0.06em" }}>
+                                    Usando endereço da cotação
+                                  </p>
+                                </div>
+                                <div className="space-y-1 text-[11px]" style={{ color: "var(--color-body-text)" }}>
+                                  <p>
+                                    <span className="font-semibold" style={{ color: "#4338CA" }}>🎯 Cotação:</span>{" "}
+                                    {destAddress}
+                                  </p>
+                                  <p style={{ color: "var(--color-muted-text)" }}>
+                                    <span className="font-semibold">📦 ERP:</span> {erpSuggestedAddr}
+                                  </p>
+                                </div>
+                                <button type="button"
+                                        onClick={() => {
+                                          setValue("deliveryAddress", erpSuggestedAddr);
+                                          setKeepingQuoteAddr(false);
+                                          setAddrOverridden(true);
+                                        }}
+                                        className="mt-2 text-[10.5px] font-semibold px-2 py-1 rounded transition-colors"
+                                        style={{ backgroundColor: "rgba(202,138,4,0.15)", color: "#854D0E" }}>
+                                  Usar endereço do ERP
+                                </button>
+                              </div>
+                            )}
 
                             {isEditingAddr ? (
                               <div className="space-y-1.5">

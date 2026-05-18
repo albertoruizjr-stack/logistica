@@ -271,6 +271,7 @@ export type DeliveryAddressSource =
   | "ORDER_DELIVERY_ADDRESS"  // campo enderecoEntrega da Citel (obra)
   | "CUSTOMER_MAIN_ADDRESS"   // fallback para endereço do cliente
   | "MANUAL_OVERRIDE"         // operador editou manualmente
+  | "QUOTE_ADDRESS"           // endereço veio da cotação salva (prioritário sobre ERP)
 
 // ──────────────────────────────────────────────
 // RESULTADO DA CONSULTA DE PEDIDO (erp/pedido)
