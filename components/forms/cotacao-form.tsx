@@ -242,6 +242,9 @@ export function FreightQuoteForm({ stores, sessionStoreId }: Props) {
   const [excecaoReason, setExcecaoReason]         = useState("");
   const [showExcecaoInput, setShowExcecaoInput]   = useState(false);
   const [deliveryOption, setDeliveryOption]       = useState<DeliveryOption>("TOMORROW_FIRST");
+  // Veículo para EXPRESS: moto cota direto Lalamove (mais barato);
+  // carro/van cai na tabela express por zona.
+  const [expressVehicle, setExpressVehicle]       = useState<"MOTORCYCLE" | "CAR">("CAR");
   const [pendingCalculate, setPendingCalculate]   = useState(false);
 
   const addressInputRef  = useRef<HTMLInputElement | null>(null);
@@ -423,6 +426,8 @@ export function FreightQuoteForm({ stores, sessionStoreId }: Props) {
           destLat:        data.destLat,
           destLng:        data.destLng,
           deliveryOption,
+          // Só envia quando o usuário escolheu EXPRESS — outros modais ignoram.
+          expressVehicle: deliveryOption === "EXPRESS" ? expressVehicle : undefined,
           scheduledFor:   data.scheduledDate,
           cutoffException,
           cutoffExceptionReason: cutoffException ? excecaoReason : undefined,
@@ -702,6 +707,46 @@ export function FreightQuoteForm({ stores, sessionStoreId }: Props) {
                     min={new Date(Date.now() + 86_400_000).toISOString().split("T")[0]}
                     className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
                   />
+                </div>
+              )}
+
+              {/* Veículo p/ entrega expressa: moto cota direto Lalamove (mais barato) */}
+              {deliveryOption === "EXPRESS" && (
+                <div className="mt-3">
+                  <label className="text-xs text-gray-600 mb-2 block font-medium">
+                    Tipo de veículo
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setExpressVehicle("MOTORCYCLE")}
+                      className={cn(
+                        "px-3 py-2.5 rounded-lg border text-sm font-medium transition flex items-center justify-center gap-2",
+                        expressVehicle === "MOTORCYCLE"
+                          ? "border-orange-500 bg-orange-50 text-orange-700"
+                          : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+                      )}
+                    >
+                      🏍️ Moto
+                      <span className="text-[10px] text-gray-500 font-normal">cotação Lalamove</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setExpressVehicle("CAR")}
+                      className={cn(
+                        "px-3 py-2.5 rounded-lg border text-sm font-medium transition flex items-center justify-center gap-2",
+                        expressVehicle === "CAR"
+                          ? "border-orange-500 bg-orange-50 text-orange-700"
+                          : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+                      )}
+                    >
+                      🚐 Carro/Van
+                      <span className="text-[10px] text-gray-500 font-normal">tabela express</span>
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-gray-400 mt-1.5">
+                    Moto vale pra pacotes leves (até 20 kg) sem lata grande ou papelão.
+                  </p>
                 </div>
               )}
             </div>
