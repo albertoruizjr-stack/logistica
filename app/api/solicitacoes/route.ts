@@ -133,9 +133,15 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Verifica duplicata antes de criar (evita erro 500 da constraint UNIQUE)
+    // Verifica duplicata antes de criar — só bloqueia DRs ATIVAS (status != CANCELLED).
+    // DRs canceladas não bloqueiam: vendedor que cancela e refaz a solicitação consegue.
+    // Alinha com o UNIQUE INDEX parcial criado em migration_partial_unique_order.sql.
     const existing = await prisma.deliveryRequest.findFirst({
-      where: { orderNumber: data.orderNumber, orderStoreId: data.orderStoreId },
+      where: {
+        orderNumber:  data.orderNumber,
+        orderStoreId: data.orderStoreId,
+        status:       { not: "CANCELLED" },
+      },
       select: { id: true },
     });
     if (existing) {

@@ -523,7 +523,11 @@ model DeliveryRequest {
   erpSyncAlerts ERPSyncAlert[]
   proofs        DeliveryProof[]
 
-  @@unique([orderNumber, orderStoreId])
+  // Unicidade controlada via UNIQUE INDEX PARCIAL no Postgres
+  // (CREATE UNIQUE INDEX ... WHERE status <> 'CANCELLED').
+  // Ver prisma/migration_partial_unique_order.sql.
+  // DRs em CANCELLED não bloqueiam novas inserções — permite recriar quando
+  // vendedor cancela e refaz com o mesmo PD.
   @@map("delivery_requests")
 }
 
