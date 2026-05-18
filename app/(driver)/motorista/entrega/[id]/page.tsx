@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { ArrowLeft, MapPin, Phone, Package, CheckCircle2, AlertTriangle } from "lucide-react";
 import DeliveryActions from "./_components/delivery-actions";
 import NavigateButton from "./_components/navigate-button";
+import { isDeliveryAssignedToDriver } from "@/lib/driver-ownership";
 
 export default async function EntregaDetalhePage({
   params,
@@ -24,15 +25,16 @@ export default async function EntregaDetalhePage({
   const dr = await prisma.deliveryRequest.findUnique({
     where: { id: params.id },
     include: {
-      items:    { select: { id: true, productName: true, quantity: true, unit: true } },
-      proofs:   { orderBy: { createdAt: "desc" } },
-      dispatch: { select: { driverId: true } },
+      items:  { select: { id: true, productName: true, quantity: true, unit: true } },
+      proofs: { orderBy: { createdAt: "desc" } },
     },
   });
   if (!dr) notFound();
 
-  // Garante que essa entrega pertence ao motorista logado
-  if (dr.dispatch?.driverId !== driver.id) {
+  // Garante que essa entrega pertence ao motorista logado.
+  // Considera tanto a Route (fase ROTEIRIZADO) quanto o Dispatch (fase DISPATCHED).
+  const isMine = await isDeliveryAssignedToDriver(dr.id, driver.id);
+  if (!isMine) {
     return (
       <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm">
         <AlertTriangle className="w-5 h-5 text-amber-600 mb-2" />

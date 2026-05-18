@@ -5,6 +5,7 @@ import { apiSuccess, apiError } from "@/types";
 import { transitionDeliveryRequest } from "@/services/state-machine.service";
 import { uploadProofPhoto, isStorageConfigured } from "@/lib/supabase-storage";
 import { checkAndCompleteRouteFromDeliveryRequest } from "@/services/route-dispatch.service";
+import { isDeliveryAssignedToDriver } from "@/lib/driver-ownership";
 
 const MAX_PHOTO_BYTES = 10 * 1024 * 1024; // 10 MB
 
@@ -37,10 +38,12 @@ export async function POST(
 
     const dr = await prisma.deliveryRequest.findUnique({
       where:   { id: params.id },
-      include: { dispatch: { select: { driverId: true } }, proofs: { select: { type: true } } },
+      include: { proofs: { select: { type: true } } },
     });
     if (!dr) return NextResponse.json(apiError("Entrega não encontrada", "NOT_FOUND"), { status: 404 });
-    if (dr.dispatch?.driverId !== driver.id) {
+
+    const isMine = await isDeliveryAssignedToDriver(dr.id, driver.id);
+    if (!isMine) {
       return NextResponse.json(apiError("Entrega não é sua", "FORBIDDEN"), { status: 403 });
     }
 

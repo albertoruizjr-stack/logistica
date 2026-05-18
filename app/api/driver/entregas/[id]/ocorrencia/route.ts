@@ -5,6 +5,7 @@ import { getSessionFromRequest } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/types";
 import { transitionDeliveryRequest } from "@/services/state-machine.service";
 import { checkAndCompleteRouteFromDeliveryRequest } from "@/services/route-dispatch.service";
+import { isDeliveryAssignedToDriver } from "@/lib/driver-ownership";
 
 const occurrenceSchema = z.object({
   type:  z.enum(["AUSENTE", "RECUSA_ENTREGA", "ENDERECO_ERRADO", "AVARIA"]),
@@ -41,11 +42,13 @@ export async function POST(
     if (!driver) return NextResponse.json(apiError("Motorista não vinculado"), { status: 403 });
 
     const dr = await prisma.deliveryRequest.findUnique({
-      where:   { id: params.id },
-      include: { dispatch: { select: { driverId: true } } },
+      where:  { id: params.id },
+      select: { id: true },
     });
     if (!dr) return NextResponse.json(apiError("Entrega não encontrada", "NOT_FOUND"), { status: 404 });
-    if (dr.dispatch?.driverId !== driver.id) {
+
+    const isMine = await isDeliveryAssignedToDriver(dr.id, driver.id);
+    if (!isMine) {
       return NextResponse.json(apiError("Entrega não é sua", "FORBIDDEN"), { status: 403 });
     }
 
