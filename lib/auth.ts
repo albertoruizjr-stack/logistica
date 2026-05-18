@@ -15,11 +15,17 @@ export interface JWTPayload {
   name: string;
 }
 
+// Sessão de 7 dias com refresh sliding: enquanto o usuário está ativo,
+// o middleware re-emite o token. Um turno (8h) era curto demais quando o operador
+// deixava a aba aberta entre uma operação e outra (ex: roteirizar de manhã,
+// despachar no almoço).
+export const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 dias
+
 export async function createToken(payload: JWTPayload): Promise<string> {
   return new SignJWT({ ...payload })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
-    .setExpirationTime("8h")  // sessão de 8 horas (turno de trabalho)
+    .setExpirationTime(`${SESSION_TTL_SECONDS}s`)
     .sign(JWT_SECRET);
 }
 

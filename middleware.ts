@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyToken } from "@/lib/auth-edge";
+import { verifyToken, shouldRefresh, reissueToken, SESSION_TTL_SECONDS } from "@/lib/auth-edge";
 
 const PUBLIC_PATHS = ["/login", "/api/auth/login", "/api/health"];
 
@@ -52,7 +52,20 @@ export async function middleware(req: NextRequest) {
       }
     }
 
-    return NextResponse.next();
+    // Refresh sliding: usuário ativo nunca precisa relogar. Re-emite o token
+    // quando falta menos de 1 dia pra expirar (evita gravação a cada request).
+    const response = NextResponse.next();
+    if (shouldRefresh(payload)) {
+      const newToken = await reissueToken(payload);
+      response.cookies.set("auth_token", newToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
+        maxAge: SESSION_TTL_SECONDS,
+        path: "/",
+      });
+    }
+    return response;
   } catch {
     // falha inesperada no Edge Runtime — redireciona para login em vez de expor erro bruto
     if (pathname.startsWith("/api/")) {

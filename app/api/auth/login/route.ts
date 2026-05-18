@@ -43,11 +43,12 @@ export async function POST(req: NextRequest) {
     );
 
     // define cookie HTTP-only para segurança
+    const { SESSION_TTL_SECONDS } = await import("@/lib/auth");
     response.cookies.set("auth_token", result.token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
-      maxAge: 60 * 60 * 8, // 8 horas
+      maxAge: SESSION_TTL_SECONDS,
       path: "/",
     });
 
