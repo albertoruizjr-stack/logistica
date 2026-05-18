@@ -1,7 +1,10 @@
 // ──────────────────────────────────────────────
 // WEBHOOK LALAMOVE
 // Recebe eventos de atualização de pedidos do Lalamove.
-// Verifica assinatura HMAC e processa assincronamente.
+//
+// Política da Lalamove: "Make sure your Webhook URL is sending 200 to our
+// requests" — devolvemos 200 mesmo pra payloads malformados ou de validação
+// do painel deles. Erros vão pro log, não pro status code.
 // ──────────────────────────────────────────────
 
 import { NextRequest, NextResponse } from "next/server";
@@ -11,17 +14,30 @@ import { LALAMOVE_STATUS_MAP } from "@/types";
 import type { LalamoveOrderStatus } from "@/types";
 import { updateDispatchStatus } from "@/services/despacho.service";
 
+const OK = NextResponse.json({ received: true });
+
+// GET /api/lalamove/webhook
+// Health check / validação inicial do painel da Lalamove.
+export async function GET() {
+  return NextResponse.json({ status: "ok", endpoint: "lalamove-webhook" });
+}
+
 export async function POST(req: NextRequest) {
   const rawBody = await req.text();
 
-  // verificação de assinatura (produção)
+  // Verificação de assinatura (só em produção). Falha vira log, não 401 —
+  // o painel da Lalamove faz POST de teste sem signature pra validar a URL.
   if (process.env.NODE_ENV === "production") {
     const signature = req.headers.get("X-Lalamove-Signature") ?? "";
     const timestamp = req.headers.get("X-Lalamove-Timestamp") ?? "";
 
+    if (!signature || !timestamp) {
+      console.info("[WEBHOOK] sem signature — provável teste do painel Lalamove");
+      return OK;
+    }
     if (!verifyLalamoveWebhook(rawBody, signature, timestamp)) {
-      console.warn("[WEBHOOK] Assinatura Lalamove inválida");
-      return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
+      console.warn("[WEBHOOK] Assinatura Lalamove inválida (silenciado com 200)");
+      return OK;
     }
   }
 
@@ -29,26 +45,26 @@ export async function POST(req: NextRequest) {
   try {
     payload = JSON.parse(rawBody);
   } catch {
-    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+    console.warn("[WEBHOOK] body não é JSON válido:", rawBody.slice(0, 200));
+    return OK;
   }
 
-  const orderId = payload.orderId as string;
-  const eventType = payload.status as string;
+  const orderId = payload.orderId as string | undefined;
+  const eventType = payload.status as string | undefined;
 
   if (!orderId) {
-    return NextResponse.json({ error: "Missing orderId" }, { status: 400 });
+    console.info("[WEBHOOK] payload sem orderId (provável evento de validação)", { eventType, keys: Object.keys(payload) });
+    return OK;
   }
 
   try {
-    // busca a ordem no banco
     const lalamoveOrder = await prisma.lalamoveOrder.findUnique({
       where: { lalamoveOrderId: orderId },
     });
 
     if (!lalamoveOrder) {
-      // pedido pode ter sido criado fora do sistema — ignora silenciosamente
       console.warn("[WEBHOOK] Lalamove order não encontrada:", orderId);
-      return NextResponse.json({ received: true });
+      return OK;
     }
 
     // registra o evento bruto para auditoria
@@ -56,46 +72,40 @@ export async function POST(req: NextRequest) {
       data: {
         lalamoveOrderId: lalamoveOrder.id,
         externalOrderId: orderId,
-        eventType,
+        eventType: eventType ?? "UNKNOWN",
         rawPayload: payload as never,
       },
     });
 
-    // mapeia status Lalamove → interno
-    const internalStatus = LALAMOVE_STATUS_MAP[eventType as LalamoveOrderStatus];
+    const internalStatus = eventType ? LALAMOVE_STATUS_MAP[eventType as LalamoveOrderStatus] : undefined;
 
     if (internalStatus) {
-      // atualiza a ordem Lalamove
       await prisma.lalamoveOrder.update({
         where: { id: lalamoveOrder.id },
         data: {
           status: eventType,
           internalStatus,
-          // atualiza dados do motorista quando atribuído
           driverName: (payload.driverInfo as Record<string, string>)?.name ?? lalamoveOrder.driverName,
           driverPhone: (payload.driverInfo as Record<string, string>)?.phone ?? lalamoveOrder.driverPhone,
           driverPlate: (payload.driverInfo as Record<string, string>)?.plateNumber ?? lalamoveOrder.driverPlate,
         },
       });
 
-      // propaga para o despacho
       await updateDispatchStatus(lalamoveOrder.dispatchId, internalStatus, {
         actualCost: payload.priceBreakdown
           ? parseFloat((payload.priceBreakdown as Record<string, string>).total ?? "0")
           : undefined,
       });
 
-      // marca o evento como processado
       await prisma.lalamoveEvent.updateMany({
         where: { lalamoveOrderId: lalamoveOrder.id, processedAt: null },
         data: { processedAt: new Date() },
       });
     }
 
-    return NextResponse.json({ received: true });
+    return OK;
   } catch (error) {
     console.error("[WEBHOOK] Erro ao processar evento Lalamove:", error);
-    // retorna 200 para o Lalamove não retentar (o erro já está logado)
-    return NextResponse.json({ received: true, error: "Processing error" });
+    return OK;
   }
 }

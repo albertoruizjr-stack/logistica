@@ -228,9 +228,15 @@ export function verifyLalamoveWebhook(
 ): boolean {
   const { apiSecret } = getLalamoveConfig();
   if (!apiSecret) return false;
+  if (!signature || !timestamp) return false;
+
   const expectedSignature = generateSignature(apiSecret, timestamp, "POST", "/webhook", payload);
-  return crypto.timingSafeEqual(
-    Buffer.from(signature, "hex"),
-    Buffer.from(expectedSignature, "hex")
-  );
+  const sig = Buffer.from(signature, "hex");
+  const exp = Buffer.from(expectedSignature, "hex");
+
+  // crypto.timingSafeEqual lança exception se buffers tiverem tamanhos diferentes.
+  // Esse caso acontece quando o painel da Lalamove valida a URL com signature vazia.
+  if (sig.length !== exp.length) return false;
+
+  return crypto.timingSafeEqual(sig, exp);
 }
