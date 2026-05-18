@@ -24,11 +24,15 @@ interface OptionMapping {
 }
 
 const DELIVERY_OPTION_MAP: Record<DeliveryOption, OptionMapping> = {
+  // SAME_DAY = entrega hoje pela frota interna na 2ª onda da tarde.
+  // Custo marginal da frota é zero (R$ 26k/mês fixos), então NÃO aplica
+  // multiplicador de urgência — usa tabela normal. Só EXPRESS (Lalamove/99)
+  // continua sendo "urgent" e cobra a tabela express por zona.
   SAME_DAY: {
-    slaType:       SLAType.URGENT,
-    dispatchWindow: DispatchWindow.EXPRESS,
-    deliveryType:  DeliveryType.URGENT,
-    isUrgent:      true,
+    slaType:       SLAType.STANDARD,
+    dispatchWindow: DispatchWindow.SECOND_DISPATCH,
+    deliveryType:  DeliveryType.STANDARD,
+    isUrgent:      false,
     estimatedDays: 0,
     windowLabel:   "Entrega hoje — Same Day",
   },
@@ -288,6 +292,7 @@ export async function listFreightQuotes(filter: ListQuotesFilter = {}) {
         id: true, status: true, deliveryOption: true,
         destAddress: true, city: true, state: true,
         distanceKm: true, suggestedPrice: true, dispatchWindow: true,
+        isUrgent: true, storeId: true,
         expiresAt: true, createdAt: true,
         store:     { select: { code: true, name: true } },
         createdBy: { select: { name: true } },

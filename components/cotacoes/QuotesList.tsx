@@ -8,6 +8,7 @@ import {
   ChevronLeft, ChevronRight, Search,
 } from "lucide-react";
 import { cn, formatCurrency, formatDistance } from "@/lib/utils";
+import { SolicitarEntregaDrawer } from "@/components/cotacao/solicitar-entrega-drawer";
 
 interface Quote {
   id:             string;
@@ -19,6 +20,8 @@ interface Quote {
   distanceKm:     number;
   suggestedPrice: number;
   dispatchWindow?: string;
+  isUrgent:       boolean;
+  storeId:        string;
   expiresAt?:     string;
   createdAt:      string;
   store:          { code: string; name: string };
@@ -73,6 +76,8 @@ export function QuotesList({ initialStoreId, isAdmin, stores }: Props) {
   const [search,      setSearch]      = useState("");
   const [searchInput, setSearchInput] = useState("");
   const [page,        setPage]        = useState(1);
+  // Quote sendo convertida — abre o drawer direto sem refazer a cotação
+  const [convertingQuote, setConvertingQuote] = useState<Quote | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -110,13 +115,14 @@ export function QuotesList({ initialStoreId, isAdmin, stores }: Props) {
   }
 
   function handleConverter(q: Quote) {
-    // navega para cotação com o quoteId pré-preenchido
-    router.push(`/cotacao?quote=${q.id}`);
+    // Abre o drawer de solicitação direto, sem refazer a cotação.
+    setConvertingQuote(q);
   }
 
   const items = data?.items ?? [];
 
   return (
+    <>
     <div className="space-y-4">
       {/* ── Filtros ── */}
       <div className="bg-white rounded-xl border border-gray-200 p-4">
@@ -337,5 +343,20 @@ export function QuotesList({ initialStoreId, isAdmin, stores }: Props) {
         )}
       </div>
     </div>
+
+    {/* Drawer de solicitação — abre quando o usuário clica em "Converter" */}
+    {convertingQuote && (
+      <SolicitarEntregaDrawer
+        open={true}
+        onClose={() => setConvertingQuote(null)}
+        freightQuoteId={convertingQuote.id}
+        storeId={convertingQuote.storeId}
+        stores={stores}
+        suggestedPrice={convertingQuote.suggestedPrice}
+        isUrgent={convertingQuote.isUrgent}
+        destAddress={convertingQuote.destAddress}
+      />
+    )}
+    </>
   );
 }
