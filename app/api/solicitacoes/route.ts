@@ -41,7 +41,7 @@ const createSchema = z.object({
   // snapshots de endereço e status ERP — capturados pelo drawer no momento da consulta
   customerAddressSnapshot:  z.string().optional(), // JSON: CitelEndereco do cliente
   deliveryAddressSnapshot:  z.string().optional(), // JSON: CitelEndereco efetivo
-  deliveryAddressSource:    z.enum(["ORDER_DELIVERY_ADDRESS", "CUSTOMER_MAIN_ADDRESS", "MANUAL_OVERRIDE"]).optional(),
+  deliveryAddressSource:    z.enum(["ORDER_DELIVERY_ADDRESS", "CUSTOMER_MAIN_ADDRESS", "MANUAL_OVERRIDE", "QUOTE_ADDRESS"]).optional(),
   deliveryAddressOriginal:  z.string().optional(), // endereço antes de override manual
   erpOrderStatus:           z.string().optional(), // status bruto Citel
   erpOrderValidationStatus: z.string().optional(), // VALID | CANCELLED | ...

@@ -312,6 +312,13 @@ export function SolicitarEntregaDrawer({
       if (!res.ok) {
         if (json.code === "DUPLICATE") {
           setSubmitError(`Já existe uma solicitação para o PD ${data.orderNumber.trim()} nesta loja.`);
+        } else if (json.code === "VALIDATION_ERROR" && json.details?.fieldErrors) {
+          // Mostra qual(is) campo(s) o backend rejeitou — facilita debug em produção.
+          const fields = json.details.fieldErrors as Record<string, string[]>;
+          const msgs = Object.entries(fields)
+            .map(([field, errs]) => `${field}: ${(errs ?? []).join(", ")}`)
+            .join(" · ");
+          setSubmitError(msgs || json.error || "Dados inválidos");
         } else {
           setSubmitError(json.error ?? "Erro ao criar solicitação");
         }
