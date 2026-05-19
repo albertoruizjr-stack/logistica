@@ -507,6 +507,117 @@ export async function deleteWave(waveId: string, operatorId: string) {
   return { waveId: wave.id, status: wave.status };
 }
 
+// ──────────────────────────────────────────────
+// PARADA EXTRA NUMA ROTA
+//
+// sequenceJson é Json[], suporta itens com formato distinto:
+//   - DELIVERY (padrão):   { stopPosition, deliveryRequestId, eta }
+//   - STORE_VISIT:         { stopPosition, type: "STORE_VISIT", storeId, notes, lat, lng }
+//   - EXTRA_STOP:          { stopPosition, type: "EXTRA_STOP", address, notes, lat, lng }
+//
+// Permite operador adicionar uma parada extra mesmo após o despacho — útil
+// quando precisa passar numa loja pra pegar algo durante o trajeto.
+// ──────────────────────────────────────────────
+
+export interface ExtraStopInput {
+  kind:                "STORE_VISIT" | "EXTRA_STOP";
+  storeId?:            string;
+  address?:            string;
+  lat?:                number | null;
+  lng?:                number | null;
+  notes?:              string;
+  insertAtPosition?:   number;  // se omitido, vai pro final
+}
+
+export async function addExtraStopToRoute(routeId: string, input: ExtraStopInput) {
+  const route = await prisma.route.findUnique({
+    where:  { id: routeId },
+    select: { id: true, status: true, sequenceJson: true },
+  });
+  if (!route) throw new Error("Rota não encontrada");
+  if (route.status === "COMPLETED" || route.status === "CANCELLED") {
+    throw new Error(`Não é possível adicionar parada em rota ${route.status}`);
+  }
+  if (input.kind === "STORE_VISIT" && !input.storeId) {
+    throw new Error("storeId obrigatório para STORE_VISIT");
+  }
+  if (input.kind === "EXTRA_STOP" && !input.address) {
+    throw new Error("address obrigatório para EXTRA_STOP");
+  }
+
+  const seq = (route.sequenceJson as unknown as Array<Record<string, unknown>> | null) ?? [];
+  const maxPos = seq.reduce((m, s) => Math.max(m, Number(s.stopPosition ?? 0)), 0);
+  const insertAt = input.insertAtPosition ?? maxPos + 1;
+
+  // Cria entry com identifier único pra futuro DELETE
+  const stopId = `extra_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+  const newStop: Record<string, unknown> = {
+    stopId,
+    stopPosition: insertAt,
+    type:         input.kind,
+    notes:        input.notes ?? null,
+    lat:          input.lat  ?? null,
+    lng:          input.lng  ?? null,
+  };
+  if (input.kind === "STORE_VISIT") newStop.storeId = input.storeId;
+  if (input.kind === "EXTRA_STOP")  newStop.address = input.address;
+
+  // Renumera entradas existentes >= insertAt pra abrir espaço
+  const updated = [
+    ...seq.map((s) => {
+      const pos = Number(s.stopPosition ?? 0);
+      return pos >= insertAt ? { ...s, stopPosition: pos + 1 } : s;
+    }),
+    newStop,
+  ].sort((a, b) => Number(a.stopPosition ?? 0) - Number(b.stopPosition ?? 0));
+
+  await prisma.route.update({
+    where: { id: routeId },
+    data:  {
+      sequenceJson: updated as unknown as Prisma.InputJsonValue,
+      stopCount:    updated.length,
+    },
+  });
+
+  return { routeId, stopId, stopPosition: insertAt, total: updated.length };
+}
+
+export async function removeExtraStop(routeId: string, stopId: string) {
+  const route = await prisma.route.findUnique({
+    where:  { id: routeId },
+    select: { id: true, status: true, sequenceJson: true },
+  });
+  if (!route) throw new Error("Rota não encontrada");
+  if (route.status === "COMPLETED" || route.status === "CANCELLED") {
+    throw new Error(`Não é possível remover parada em rota ${route.status}`);
+  }
+
+  const seq = (route.sequenceJson as unknown as Array<Record<string, unknown>> | null) ?? [];
+  const target = seq.find((s) => s.stopId === stopId);
+  if (!target) throw new Error("Parada não encontrada");
+  if (target.type !== "STORE_VISIT" && target.type !== "EXTRA_STOP") {
+    throw new Error("Só é possível remover paradas extras (DELIVERY usa cancelamento de DR)");
+  }
+
+  const removedPos = Number(target.stopPosition ?? 0);
+  const updated = seq
+    .filter((s) => s.stopId !== stopId)
+    .map((s) => {
+      const pos = Number(s.stopPosition ?? 0);
+      return pos > removedPos ? { ...s, stopPosition: pos - 1 } : s;
+    });
+
+  await prisma.route.update({
+    where: { id: routeId },
+    data:  {
+      sequenceJson: updated as unknown as Prisma.InputJsonValue,
+      stopCount:    updated.length,
+    },
+  });
+
+  return { routeId, removed: stopId, total: updated.length };
+}
+
 export async function getWaveDetail(waveId: string) {
   const wave = await prisma.routingWave.findUnique({
     where: { id: waveId },

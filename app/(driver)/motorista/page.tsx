@@ -2,12 +2,17 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { Truck, MapPin, Clock, CheckCircle2, AlertTriangle } from "lucide-react";
+import { Truck, MapPin, Clock, CheckCircle2, AlertTriangle, Store } from "lucide-react";
 
 interface SequenceStop {
-  stopPosition:      number | null;
-  deliveryRequestId: string;
-  eta:               string | number | null;
+  stopPosition:       number | null;
+  deliveryRequestId?: string;
+  type?:              "DELIVERY" | "STORE_VISIT" | "EXTRA_STOP";
+  storeId?:           string;
+  address?:           string;
+  notes?:             string;
+  stopId?:            string;
+  eta:                string | number | null;
 }
 
 export default async function MotoristaHomePage() {
@@ -52,26 +57,46 @@ export default async function MotoristaHomePage() {
     );
   }
 
-  // Junta IDs de stops pra buscar metadados em uma query
+  // Coleta IDs de entregas reais (paradas extras não têm deliveryRequestId)
   const allStopIds = routes.flatMap((r) => {
     const seq = (r.sequenceJson as unknown as SequenceStop[] | null) ?? [];
-    return seq.map((s) => s.deliveryRequestId);
+    return seq
+      .filter((s) => !s.type || s.type === "DELIVERY")
+      .map((s) => s.deliveryRequestId)
+      .filter((id): id is string => Boolean(id));
   });
 
-  const stopsMeta = allStopIds.length > 0
-    ? await prisma.deliveryRequest.findMany({
-        where:  { id: { in: allStopIds } },
-        select: {
-          id:              true,
-          status:          true,
-          orderNumber:     true,
-          invoiceNumber:   true,
-          customerName:    true,
-          deliveryAddress: true,
-        },
-      })
-    : [];
-  const metaMap = new Map(stopsMeta.map((s) => [s.id, s]));
+  // Coleta storeIds das paradas extras tipo STORE_VISIT
+  const allStoreIds = routes.flatMap((r) => {
+    const seq = (r.sequenceJson as unknown as SequenceStop[] | null) ?? [];
+    return seq
+      .filter((s) => s.type === "STORE_VISIT" && s.storeId)
+      .map((s) => s.storeId!);
+  });
+
+  const [stopsMeta, stopsStores] = await Promise.all([
+    allStopIds.length > 0
+      ? prisma.deliveryRequest.findMany({
+          where:  { id: { in: allStopIds } },
+          select: {
+            id:              true,
+            status:          true,
+            orderNumber:     true,
+            invoiceNumber:   true,
+            customerName:    true,
+            deliveryAddress: true,
+          },
+        })
+      : Promise.resolve([]),
+    allStoreIds.length > 0
+      ? prisma.store.findMany({
+          where:  { id: { in: allStoreIds } },
+          select: { id: true, code: true, name: true, address: true },
+        })
+      : Promise.resolve([]),
+  ]);
+  const metaMap  = new Map(stopsMeta.map((s) => [s.id, s]));
+  const storeMap = new Map(stopsStores.map((s) => [s.id, s]));
 
   return (
     <div className="space-y-4">
@@ -80,9 +105,10 @@ export default async function MotoristaHomePage() {
           .slice()
           .sort((a, b) => (a.stopPosition ?? 0) - (b.stopPosition ?? 0));
 
-        const totalParadas = sequence.length;
-        const entregues = sequence.filter((s) => {
-          const m = metaMap.get(s.deliveryRequestId);
+        const deliveryStops = sequence.filter((s) => !s.type || s.type === "DELIVERY");
+        const totalParadas = deliveryStops.length;  // só conta entregas reais
+        const entregues = deliveryStops.filter((s) => {
+          const m = s.deliveryRequestId ? metaMap.get(s.deliveryRequestId) : null;
           return m?.status === "DELIVERED";
         }).length;
 
@@ -112,21 +138,59 @@ export default async function MotoristaHomePage() {
             {/* Lista de paradas */}
             <ol className="divide-y divide-gray-100">
               {sequence.map((stop, idx) => {
-                const meta = metaMap.get(stop.deliveryRequestId);
-                const docLabel = meta?.invoiceNumber
-                  ? `NF ${meta.invoiceNumber}`
-                  : meta?.orderNumber
-                    ? `PD ${meta.orderNumber}`
-                    : `#${stop.deliveryRequestId.slice(-6)}`;
-                const isDelivered = meta?.status === "DELIVERED";
                 const etaStr = stop.eta
                   ? new Date(stop.eta).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
                   : null;
 
+                // Parada extra (loja ou endereço livre) — não clicável, sem botão "entregar"
+                if (stop.type === "STORE_VISIT" || stop.type === "EXTRA_STOP") {
+                  const isStore = stop.type === "STORE_VISIT";
+                  const store = isStore && stop.storeId ? storeMap.get(stop.storeId) : null;
+                  const title = isStore
+                    ? store ? `Loja ${store.code} — ${store.name}` : "Loja"
+                    : "Parada extra";
+                  const addr = isStore ? (store?.address ?? "—") : (stop.address ?? "—");
+                  return (
+                    <li key={stop.stopId ?? `extra-${idx}`} className="bg-indigo-50/60 border-l-2 border-indigo-400">
+                      <div className="flex items-start gap-3 px-4 py-3">
+                        <span className="w-9 h-9 rounded-full bg-indigo-600 text-white text-sm font-bold flex items-center justify-center flex-shrink-0">
+                          {stop.stopPosition ?? idx + 1}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-semibold text-indigo-900 flex items-center gap-1.5">
+                            <Store className="w-3.5 h-3.5" />
+                            {title}
+                          </p>
+                          <p className="text-xs text-indigo-700 mt-0.5 truncate">{addr}</p>
+                          {stop.notes && (
+                            <p className="text-xs text-indigo-800 mt-1 font-medium">📝 {stop.notes}</p>
+                          )}
+                        </div>
+                        {etaStr && (
+                          <p className="text-xs font-semibold text-indigo-700 flex items-center gap-1">
+                            <Clock className="w-3 h-3" />
+                            {etaStr}
+                          </p>
+                        )}
+                      </div>
+                    </li>
+                  );
+                }
+
+                // Entrega normal
+                const drId = stop.deliveryRequestId!;
+                const meta = metaMap.get(drId);
+                const docLabel = meta?.invoiceNumber
+                  ? `NF ${meta.invoiceNumber}`
+                  : meta?.orderNumber
+                    ? `PD ${meta.orderNumber}`
+                    : `#${drId.slice(-6)}`;
+                const isDelivered = meta?.status === "DELIVERED";
+
                 return (
-                  <li key={stop.deliveryRequestId}>
+                  <li key={drId}>
                     <Link
-                      href={`/motorista/entrega/${stop.deliveryRequestId}`}
+                      href={`/motorista/entrega/${drId}`}
                       className="flex items-start gap-3 px-4 py-3 hover:bg-gray-50 active:bg-gray-100"
                     >
                       <div className="flex-shrink-0">
