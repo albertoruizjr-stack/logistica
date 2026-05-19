@@ -65,7 +65,11 @@ export default async function CotacaoPage() {
                     </p>
                   </div>
                 ) : (
-                  <span className="text-xs text-gray-400 italic">—</span>
+                  // Z7 (acima de 30 km): R$ 3/km na normal, Lalamove no express.
+                  <div className="text-right">
+                    <p className="text-sm font-semibold text-gray-900">R$ 3,00/km</p>
+                    <p className="text-xs text-red-600">Express: cotação Lalamove</p>
+                  </div>
                 )}
               </div>
             ))}

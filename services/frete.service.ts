@@ -120,7 +120,12 @@ export async function calculateFreightQuote(
 
   const warning = route.isApproximate ? FALLBACK_WARNING : undefined;
 
-  if (!zone || zone.underConsultation) {
+  // Z7 (acima de 30 km / underConsultation): cobra R$ 3/km na tabela normal.
+  // Express continua sendo cotado direto no Lalamove (acontece em outra etapa,
+  // ver app/api/frete/cotacao/route.ts onde data.expressVehicle for setado).
+  // Sem zona alguma → mantém comportamento de exceção zerado.
+  const Z7_PRICE_PER_KM = 3;
+  if (!zone) {
     return {
       distanceKm:               route.distanceKm,
       durationMinutes:          route.durationInTrafficMin ?? route.durationMin,
@@ -129,15 +134,41 @@ export async function calculateFreightQuote(
       isApproximate:            route.isApproximate,
       isTrafficFresh:           route.isTrafficFresh,
       warning,
-      zone:              zone ?? null,
+      zone:              null,
       suggestedPrice:    0,
       isUrgent:          mapping.isUrgent,
       urgentFactor:      null,
       estimatedDays:     1,
       deliveryType:      DeliveryType.EXCEPTION,
       deliveryOption,
-      dispatchWindowLabel: "Sob consulta",
+      dispatchWindowLabel: "Sem zona cadastrada",
       underConsultation: true,
+    };
+  }
+  if (zone.underConsultation) {
+    // Para EXPRESS, o handler do endpoint sobrescreve o suggestedPrice com a
+    // cotação real do Lalamove. Aqui devolvemos a tabela "por km" pro caso normal.
+    const km = route.distanceKm;
+    const distancePrice = Math.round(km * Z7_PRICE_PER_KM * 100) / 100;
+    return {
+      distanceKm:               km,
+      durationMinutes:          route.durationInTrafficMin ?? route.durationMin,
+      durationMinutesNoTraffic: route.durationMin,
+      durationInTrafficMinutes: route.durationInTrafficMin ?? null,
+      isApproximate:            route.isApproximate,
+      isTrafficFresh:           route.isTrafficFresh,
+      warning,
+      zone,
+      suggestedPrice:    distancePrice,
+      isUrgent:          mapping.isUrgent,
+      urgentFactor:      null,
+      estimatedDays:     mapping.estimatedDays,
+      deliveryType:      mapping.deliveryType,
+      deliveryOption,
+      dispatchWindowLabel: mapping.isUrgent
+        ? `${mapping.windowLabel} — cotação Lalamove`
+        : `${mapping.windowLabel} — R$ ${Z7_PRICE_PER_KM}/km (${km.toFixed(1)} km)`,
+      underConsultation: false,  // não fica mais "sob consulta" — tem preço calculado
     };
   }
 

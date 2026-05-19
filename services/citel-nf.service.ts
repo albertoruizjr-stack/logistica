@@ -157,6 +157,53 @@ export async function fetchPedidosFaturadosBatch(
 }
 
 // ──────────────────────────────────────────────
+// BUSCA POR NÚMERO DE NF — usado pelo /solicitacoes/nova
+//
+// Estratégia: varre os PDs faturados dos últimos N dias da loja e filtra
+// pelo `numeroFaturamento` que o usuário digitou. Quando acha, devolve
+// o PD correspondente já com cliente, endereço e itens — assim a tela
+// pode preencher tudo automaticamente.
+//
+// Cache leve em memória: cada (storeCode, dia) custa 1 chamada batch.
+// ──────────────────────────────────────────────
+
+const INVOICE_LOOKUP_WINDOW_DAYS = 15;
+
+export interface InvoiceLookupResult {
+  invoiceNumber: string;
+  orderNumber:   string;
+  storeCode:     string;
+  itens:         CitelItemFaturado[];
+}
+
+export async function fetchInvoiceByNumber(
+  invoiceNumber: string,
+  storeCode: string,
+): Promise<InvoiceLookupResult | null> {
+  const normalized = invoiceNumber.replace(/\D/g, "");
+  if (!normalized) return null;
+
+  const since = new Date(Date.now() - INVOICE_LOOKUP_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+  const batch = await fetchPedidosFaturadosBatch(storeCode, since);
+
+  for (const pedido of batch) {
+    const match = pedido.itens.find(
+      (it) => it.numeroFaturamento && it.numeroFaturamento.replace(/\D/g, "") === normalized,
+    );
+    if (match) {
+      return {
+        invoiceNumber: match.numeroFaturamento!,
+        orderNumber:   pedido.numeroDocumento,
+        storeCode:     match.empresaFaturamento ?? pedido.codigoEmpresa,
+        itens:         pedido.itens,
+      };
+    }
+  }
+
+  return null;
+}
+
+// ──────────────────────────────────────────────
 // PARSERS
 // ──────────────────────────────────────────────
 

@@ -2,9 +2,11 @@ import { redirect, notFound } from "next/navigation";
 import Link from "next/link";
 import { getSession } from "@/lib/auth";
 import { getWaveDetail } from "@/services/routing-wave.service";
+import { prisma } from "@/lib/prisma";
 import { PageHeader } from "@/components/ui";
 import { ArrowLeft, Truck, MapPin, Clock, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import ReRoteirizarBanner from "./_components/re-roteirizar-banner";
 
 const ALLOWED_ROLES = ["ADMIN", "OPERATOR", "LOGISTICS_OPERATOR"];
 
@@ -38,6 +40,13 @@ export default async function WaveDetalhePage({
 
   const cfg = WAVE_STATUS_COLORS[wave.status] ?? { bg: "bg-gray-100", text: "text-gray-700", label: wave.status };
   const totalStops = wave.routes.reduce((s, r) => s + (r.stopCount ?? 0), 0);
+
+  // Lista de motoristas disponíveis pra re-roteirização (todos da mesma loja/CD).
+  const drivers = await prisma.driver.findMany({
+    where: { active: true },
+    select: { id: true, name: true, available: true, storeId: true },
+    orderBy: [{ available: "desc" }, { name: "asc" }],
+  });
 
   return (
     <div className="p-6 max-w-6xl mx-auto">
@@ -98,6 +107,19 @@ export default async function WaveDetalhePage({
         </div>
       )}
 
+      {/* Banner de DRs órfãs (Spoke não conseguiu encaixar todas) */}
+      <ReRoteirizarBanner
+        waveId={wave.id}
+        orphans={wave.orphans.map((o) => ({
+          id:              o.id,
+          invoiceNumber:   o.invoiceNumber,
+          orderNumber:     o.orderNumber,
+          customerName:    o.customerName,
+          deliveryAddress: o.deliveryAddress,
+        }))}
+        drivers={drivers.map((d) => ({ id: d.id, name: d.name, available: d.available }))}
+      />
+
       {/* Rotas geradas */}
       <h2 className="text-base font-bold text-gray-900 mb-3">Rotas</h2>
       {wave.routes.length === 0 ? (
@@ -133,26 +155,35 @@ export default async function WaveDetalhePage({
                 <ol className="divide-y divide-gray-100">
                   {sequence.length === 0 ? (
                     <li className="px-4 py-3 text-sm text-gray-400 italic">Sem paradas registradas</li>
-                  ) : sequence.map((stop, idx) => (
-                    <li key={`${stop.deliveryRequestId}-${idx}`} className="px-4 py-2.5 flex items-center gap-3 text-sm">
-                      <span className="w-6 h-6 rounded-full bg-orange-100 text-orange-700 text-xs font-bold flex items-center justify-center flex-shrink-0">
-                        {stop.stopPosition ?? idx + 1}
-                      </span>
-                      <MapPin className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
-                      <Link
-                        href={`/solicitacoes?detail=${stop.deliveryRequestId}`}
-                        className="flex-1 text-gray-700 hover:text-orange-600 hover:underline truncate"
-                      >
-                        Solicitação #{stop.deliveryRequestId.slice(-6)}
-                      </Link>
-                      {stop.eta && (
-                        <span className="text-[11px] text-gray-500 flex items-center gap-1">
-                          <Clock className="w-3 h-3" />
-                          {new Date(stop.eta).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
+                  ) : sequence.map((stop, idx) => {
+                    const dr = wave.drMap.get(stop.deliveryRequestId);
+                    const docLabel = dr?.invoiceNumber
+                      ? `NF ${dr.invoiceNumber}`
+                      : dr?.orderNumber
+                        ? `PD ${dr.orderNumber}`
+                        : `#${stop.deliveryRequestId.slice(-6)}`;
+                    return (
+                      <li key={`${stop.deliveryRequestId}-${idx}`} className="px-4 py-2.5 flex items-center gap-3 text-sm">
+                        <span className="w-6 h-6 rounded-full bg-orange-100 text-orange-700 text-xs font-bold flex items-center justify-center flex-shrink-0">
+                          {stop.stopPosition ?? idx + 1}
                         </span>
-                      )}
-                    </li>
-                  ))}
+                        <MapPin className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+                        <Link
+                          href={`/solicitacoes?detail=${stop.deliveryRequestId}`}
+                          className="flex-1 text-gray-700 hover:text-orange-600 hover:underline truncate"
+                        >
+                          <span className="font-semibold">{docLabel}</span>
+                          {dr?.customerName && <span className="text-gray-500"> · {dr.customerName}</span>}
+                        </Link>
+                        {stop.eta && (
+                          <span className="text-[11px] text-gray-500 flex items-center gap-1">
+                            <Clock className="w-3 h-3" />
+                            {new Date(stop.eta).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
+                          </span>
+                        )}
+                      </li>
+                    );
+                  })}
                 </ol>
               </div>
             );

@@ -36,6 +36,7 @@ export default async function RoteirizacaoPage() {
       select: {
         id:              true,
         orderNumber:     true,
+        invoiceNumber:   true,
         customerName:    true,
         deliveryAddress: true,
         deliveryCity:    true,

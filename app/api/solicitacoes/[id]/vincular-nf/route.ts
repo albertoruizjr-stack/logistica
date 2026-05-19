@@ -34,7 +34,12 @@ export async function POST(
 
     const existing = await prisma.deliveryRequest.findUnique({
       where: { id: params.id },
-      select: { id: true, invoiceNumber: true, storeId: true },
+      select: {
+        id:            true,
+        invoiceNumber: true,
+        storeId:       true,
+        store:         { select: { code: true } },
+      },
     });
 
     if (!existing) {
@@ -67,8 +72,11 @@ export async function POST(
       );
     }
 
-    // Tenta enriquecer dados da NF via ERP (não-bloqueante)
-    const erpInvoice = await fetchInvoiceFromERP(invoiceNumber).catch(() => null);
+    // Tenta enriquecer dados da NF via ERP (não-bloqueante). Usa o code da loja
+    // da solicitação como referência pra busca no Citel.
+    const erpInvoice = existing.store?.code
+      ? await fetchInvoiceFromERP(invoiceNumber, existing.store.code).catch(() => null)
+      : null;
 
     const updated = await prisma.deliveryRequest.update({
       where: { id: params.id },

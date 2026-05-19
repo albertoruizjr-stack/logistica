@@ -508,7 +508,7 @@ export async function deleteWave(waveId: string, operatorId: string) {
 }
 
 export async function getWaveDetail(waveId: string) {
-  return prisma.routingWave.findUnique({
+  const wave = await prisma.routingWave.findUnique({
     where: { id: waveId },
     include: {
       createdBy: { select: { id: true, name: true } },
@@ -519,6 +519,50 @@ export async function getWaveDetail(waveId: string) {
       },
     },
   });
+  if (!wave) return null;
+
+  // Coleta IDs das DRs que foram incluídas em alguma rota (sucesso)
+  const routedIds = new Set<string>();
+  for (const r of wave.routes) {
+    const seq = (r.sequenceJson as unknown as Array<{ deliveryRequestId: string }> | null) ?? [];
+    for (const s of seq) routedIds.add(s.deliveryRequestId);
+  }
+
+  // Lista de DRs originalmente pedidas (vem em metadata.deliveryRequestIds quando criou a wave)
+  const meta = wave.metadata as unknown as { deliveryRequestIds?: string[]; driverIds?: string[] } | null;
+  const requestedIds: string[] = meta?.deliveryRequestIds ?? [];
+  const orphanIds = requestedIds.filter((id) => !routedIds.has(id));
+
+  // Busca dados (NF, cliente, status) de todas as DRs relevantes (roteadas + órfãs)
+  // pra UI poder mostrar NF em vez de só o ID.
+  const allIds = Array.from(new Set([...routedIds, ...orphanIds]));
+  const drData = allIds.length > 0
+    ? await prisma.deliveryRequest.findMany({
+        where:  { id: { in: allIds } },
+        select: {
+          id:              true,
+          orderNumber:     true,
+          invoiceNumber:   true,
+          customerName:    true,
+          deliveryAddress: true,
+          status:          true,
+        },
+      })
+    : [];
+  const drMap = new Map(drData.map((d) => [d.id, d]));
+
+  // Órfãs só fazem sentido se ainda estão em status que permite roteirização.
+  // Se já viraram OCORRENCIA/CANCELLED, ignora (não vale re-roteirizar lixo).
+  const orphans = orphanIds
+    .map((id) => drMap.get(id))
+    .filter((dr): dr is NonNullable<typeof dr> => Boolean(dr))
+    .filter((dr) => dr.status === "PRONTO_ROTEIRIZACAO" || dr.status === "ROTEIRIZADO");
+
+  return {
+    ...wave,
+    orphans,
+    drMap,
+  };
 }
 
 // ──────────────────────────────────────────────

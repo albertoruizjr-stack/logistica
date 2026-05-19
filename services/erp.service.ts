@@ -1,12 +1,21 @@
 // ──────────────────────────────────────────────
 // SERVIÇO DE INTEGRAÇÃO COM ERP LEGADO
-// Consulta notas fiscais e pedidos via API externa.
-// Quando não configurado retorna null — sem mocks.
-// Pedidos de venda (PD) devem ser consultados via
-// citel.service.ts (fetchPedidoCabecalho/Itens).
+//
+// CONSULTA DE NF (`fetchInvoiceFromERP`):
+//   Citel/Autcom não tem endpoint público "buscar por NF". A estratégia
+//   é varrer pedidos faturados nos últimos 15 dias da loja informada
+//   (via `fetchPedidosFaturadosBatch`) e filtrar localmente pelo
+//   `numeroFaturamento`. Quando acha, busca o cabeçalho do PD pra
+//   pegar cliente + endereço de entrega + itens com descrição.
+//
+// CONSULTA DE PD/ESTOQUE (`fetchOrderFromERP`/`fetchStockFromERP`):
+//   Mantida em ERP_API_URL/ERP_API_KEY (legado). Retorna null se não
+//   configurado — sem mocks em produção.
 // ──────────────────────────────────────────────
 
 import type { ERPInvoice, ERPOrder, ERPStockByStore } from "@/types";
+import { fetchInvoiceByNumber } from "./citel-nf.service";
+import { fetchPedidoCabecalho, fetchPedidoItens } from "./citel.service";
 
 interface ERPConfig {
   apiUrl: string;
@@ -21,39 +30,60 @@ function getConfig(): ERPConfig | null {
 }
 
 // ──────────────────────────────────────────────
-// CONSULTA DE NOTA FISCAL
+// CONSULTA DE NOTA FISCAL — via Citel
 // ──────────────────────────────────────────────
 
 export async function fetchInvoiceFromERP(
-  invoiceNumber: string
+  invoiceNumber: string,
+  storeCode: string,
 ): Promise<ERPInvoice | null> {
-  const config = getConfig();
+  if (!invoiceNumber || !storeCode) return null;
 
-  if (!config) return null;
+  // 1) Localiza qual PD originou essa NF (varrendo batch faturado da loja)
+  const lookup = await fetchInvoiceByNumber(invoiceNumber, storeCode);
+  if (!lookup) return null;
 
-  try {
-    const response = await fetch(
-      `${config.apiUrl}/api/nota-fiscal/${invoiceNumber}`,
-      {
-        headers: {
-          Authorization: `Bearer ${config.apiKey}`,
-          "Content-Type": "application/json",
-        },
-        // cache de 30s — dados do ERP não mudam com frequência
-        next: { revalidate: 30 },
-      }
-    );
+  // 2) Busca dados completos do PD: cliente, endereço, itens
+  const [cabecalho, itens] = await Promise.all([
+    fetchPedidoCabecalho(lookup.orderNumber, lookup.storeCode),
+    fetchPedidoItens(lookup.orderNumber, lookup.storeCode),
+  ]);
 
-    if (!response.ok) {
-      if (response.status === 404) return null;
-      throw new Error(`ERP retornou status ${response.status}`);
-    }
+  if (!cabecalho) return null;
 
-    return response.json() as Promise<ERPInvoice>;
-  } catch (error) {
-    console.error("[ERP] Erro ao buscar NF:", invoiceNumber, error);
-    return null;
-  }
+  const deliveryAddr = cabecalho.deliveryAddress ?? cabecalho.customerAddress;
+  const phone = cabecalho.celular ?? cabecalho.telefone ?? "";
+
+  return {
+    invoiceNumber: lookup.invoiceNumber,
+    storeCode:     lookup.storeCode,
+    seller: {
+      id:   "",   // Citel não devolve vendedor no cabeçalho
+      name: "",
+    },
+    customer: {
+      id:       cabecalho.documento ?? "",
+      name:     cabecalho.nomeCliente,
+      phone:    phone || undefined,
+      document: cabecalho.documento ?? undefined,
+    },
+    deliveryAddress: {
+      street:     [deliveryAddr?.logradouro, deliveryAddr?.numero, deliveryAddr?.complemento, deliveryAddr?.bairro]
+                    .filter(Boolean).join(", "),
+      city:       deliveryAddr?.cidade  ?? "",
+      state:      deliveryAddr?.estado  ?? "",
+      zipCode:    deliveryAddr?.cep     ?? "",
+      complement: deliveryAddr?.complemento ?? undefined,
+    },
+    items: (itens ?? []).map((it) => ({
+      productCode: it.codigo,
+      productName: it.descricao,
+      quantity:    it.quantidade,
+      unit:        it.unidade,
+    })),
+    totalValue: cabecalho.valorTotal ?? 0,
+    issuedAt:   new Date().toISOString(),  // Citel não devolve data de emissão da NF no cabeçalho do PD
+  };
 }
 
 // ──────────────────────────────────────────────

@@ -175,7 +175,7 @@ export function NovaSolicitacaoForm({ stores, sessionStoreId }: Props) {
   async function handleSearch(data: Step1Data) {
     setFetchError(null);
     try {
-      const res = await fetch(`/api/erp/nota-fiscal/${data.invoiceNumber}`);
+      const res = await fetch(`/api/erp/nota-fiscal/${data.invoiceNumber}?storeId=${data.storeId}`);
       const json = await res.json();
 
       if (!res.ok || !json.success) {

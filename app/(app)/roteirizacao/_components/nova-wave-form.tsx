@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 interface EligibleRequest {
   id:               string;
   orderNumber:      string | null;
+  invoiceNumber:    string | null;
   customerName:     string;
   deliveryAddress:  string;
   deliveryCity:     string | null;
@@ -278,7 +279,11 @@ export default function NovaWaveForm({
                   </span>
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium text-gray-900 truncate">
-                      {r.orderNumber ? `PD ${r.orderNumber}` : `#${r.id.slice(-6)}`} · {r.customerName}
+                      {r.invoiceNumber
+                        ? `NF ${r.invoiceNumber}`
+                        : r.orderNumber
+                          ? `PD ${r.orderNumber}`
+                          : `#${r.id.slice(-6)}`} · {r.customerName}
                     </p>
                     <p className="text-xs text-gray-500 truncate">
                       {r.deliveryAddress}{r.deliveryCity && ` — ${r.deliveryCity}`}
