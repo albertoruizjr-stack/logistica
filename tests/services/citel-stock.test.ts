@@ -183,8 +183,9 @@ describe("calculateDeliveryVolumeRules", () => {
 // ──────────────────────────────────────────────
 
 describe("validateVehicleCapacity", () => {
-  it("TESTE 6 — entrega acima de 500 kg bloqueia Fiorino e sugere veículo superior", () => {
-    const result = validateVehicleCapacity(501, 5, false, "FIORINO");
+  it("TESTE 6 — entrega acima de 750 kg bloqueia Fiorino e sugere veículo superior", () => {
+    // Capacidade do Fiorino atualizada 2026-05-19: 750 kg (era 500)
+    const result = validateVehicleCapacity(751, 5, false, "FIORINO");
     expect(result.allowed).toBe(false);
     expect(result.exceedsWeight).toBe(true);
     // VAN (800 kg) é o menor veículo que comporta — mais econômico que CAMINHAO
@@ -197,8 +198,9 @@ describe("validateVehicleCapacity", () => {
     expect(result.suggestedModal).toBe("CAMINHAO");
   });
 
-  it("TESTE 7 — acima de 20 latas bloqueia Fiorino", () => {
-    const result = validateVehicleCapacity(200, 21, true, "FIORINO");
+  it("TESTE 7 — acima de 25 latas bloqueia Fiorino", () => {
+    // Capacidade do Fiorino atualizada 2026-05-19: 25 latas (era 20)
+    const result = validateVehicleCapacity(200, 26, true, "FIORINO");
     expect(result.allowed).toBe(false);
     expect(result.exceedsLatas).toBe(true);
   });

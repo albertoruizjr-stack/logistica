@@ -70,6 +70,7 @@ export default async function DespachoPainel() {
           deliveryCity:    true,
           totalWeightKg:   true,
           totalLatas:      true,
+          volumeBreakdown: true,
         },
       })
     : [];
@@ -83,6 +84,7 @@ export default async function DespachoPainel() {
     deliveryCity:      d.deliveryCity,
     totalWeightKg:     d.totalWeightKg,
     totalLatas:        d.totalLatas,
+    volumeBreakdown:   (d.volumeBreakdown as Record<string, number> | null) ?? null,
   }));
 
   const pendingCount = dispatches.filter((d) => d.status === "PENDING").length;

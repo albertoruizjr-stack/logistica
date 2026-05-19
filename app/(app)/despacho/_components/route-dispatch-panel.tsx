@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2, Printer, Truck, MapPin, Clock, AlertTriangle, CheckCircle2, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { formatVolumeBreakdown } from "@/services/citel-stock.service";
 
 interface SequenceStop {
   stopPosition:      number | null;
@@ -21,6 +22,7 @@ interface StopMeta {
   deliveryCity:      string | null;
   totalWeightKg:     number | null;
   totalLatas:        number | null;
+  volumeBreakdown:   Record<string, number> | null;
 }
 
 interface Props {
@@ -192,7 +194,11 @@ export default function RouteDispatchPanel({ route, stopsMeta }: Props) {
                 )}
               </div>
               <div className="flex-shrink-0 text-right text-[11px] text-gray-500 space-y-0.5">
-                {meta?.totalLatas != null && <p>{meta.totalLatas} latas</p>}
+                {meta?.volumeBreakdown && Object.keys(meta.volumeBreakdown).length > 0 ? (
+                  <p>{formatVolumeBreakdown(meta.volumeBreakdown)}</p>
+                ) : meta?.totalLatas != null && meta.totalLatas > 0 ? (
+                  <p>{meta.totalLatas} volumes</p>
+                ) : null}
                 {meta?.totalWeightKg != null && <p>{meta.totalWeightKg.toFixed(0)} kg</p>}
                 {stop.eta && (
                   <p className={cn(

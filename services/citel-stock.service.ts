@@ -32,24 +32,46 @@ import type {
 
 export const VEHICLE_CAPACITY: Record<VehicleType, { maxWeightKg: number; maxLatas: number }> = {
   MOTO:     { maxWeightKg: 30,   maxLatas: 0    }, // bloqueada para lata/balde/galão
-  FIORINO:  { maxWeightKg: 500,  maxLatas: 20   },
+  FIORINO:  { maxWeightKg: 750,  maxLatas: 25   }, // atualizado 2026-05-19 (era 500 / 20)
   VAN:      { maxWeightKg: 800,  maxLatas: 40   },
   CARRO:    { maxWeightKg: 200,  maxLatas: 10   },
   CAMINHAO: { maxWeightKg: 1650, maxLatas: 9999 },
 };
 
-// Unidades que representam volume pesado (lata/balde/galão)
-const HEAVY_UNITS = new Set(["BD", "GL", "LT", "BAL", "LAT", "GAL"]);
+// Unidades que representam volume pesado (lata/balde/galão/barrica).
+// LA é a sigla mais comum no Citel pra Lata 18L (antes faltava — itens com LA
+// eram contados como zero volume e o sistema mostrava "0 latas").
+const HEAVY_UNITS = new Set(["LA", "LAT", "BD", "BAL", "GL", "GAL", "LT", "BR"]);
+
+// Palavras que aparecem na DESCRIÇÃO do produto e indicam item volumoso/grande
+// mesmo quando a unidade vem como UN/PC (papelão de tinta seca, lona, kraft).
+// Match case-insensitive, palavra inteira.
+const VOLUMINOUS_DESCRIPTION_PATTERNS = [
+  /\bPAPEL[ÃA]O\b/i,
+  /\bLONA\b/i,
+  /\bKRAFT\b/i,
+  /\bBARRICA\b/i,
+];
 
 export function isHeavyUnit(unit: string): boolean {
   return HEAVY_UNITS.has(unit.toUpperCase().trim());
 }
 
+export function isVoluminousByDescription(description: string): boolean {
+  if (!description) return false;
+  return VOLUMINOUS_DESCRIPTION_PATTERNS.some((re) => re.test(description));
+}
+
 // Peso padrão por unidade quando Citel não informa pesoBruto
 const WEIGHT_FALLBACK_KG: Record<string, number> = {
+  LA: 25,   // lata 18L de tinta ~22-25kg (PVA/acrílica/esmalte)
+  LAT: 25,
   BD: 30,   // balde 18L ~30kg
+  BAL: 30,
   GL: 28,   // galão 18L ~28kg
-  LT: 5,    // lata 3.6L ~5kg
+  GAL: 28,
+  LT: 5,    // quarto 3.6L ~5kg
+  BR: 80,   // barrica ~80kg
   UN: 1,    // unidade genérica — melhor que 0
 };
 const WEIGHT_FALLBACK_DEFAULT_KG = 1;
@@ -242,17 +264,38 @@ export function calculateDeliveryWeight(items: EnrichedDeliveryItem[]): {
 // ──────────────────────────────────────────────
 
 export function calculateDeliveryVolumeRules(items: EnrichedDeliveryItem[]): {
-  totalLatas: number;
-  hasHeavyUnit: boolean;
-  heavyItems: string[];
+  totalLatas:        number;            // soma de quantidade de itens "volumosos"
+  hasHeavyUnit:      boolean;
+  heavyItems:        string[];
+  // breakdown pra UI: { LA: 3, GL: 2, BD: 0, ... }
+  volumeBreakdown:   Record<string, number>;
+  // descrição/produto contém papelão, lona, kraft, barrica
+  hasVoluminousDesc: boolean;
 } {
   let totalLatas = 0;
+  let hasVoluminousDesc = false;
   const heavyItems: string[] = [];
+  const volumeBreakdown: Record<string, number> = {};
 
   for (const item of items) {
-    if (isHeavyUnit(item.unit)) {
+    const unit = item.unit.toUpperCase().trim();
+    const isHeavy   = isHeavyUnit(unit);
+    const isVolDesc = isVoluminousByDescription(item.description);
+
+    if (isHeavy) {
       totalLatas += item.quantity;
       heavyItems.push(item.productCode);
+      volumeBreakdown[unit] = (volumeBreakdown[unit] ?? 0) + item.quantity;
+    }
+    // Itens identificados por descrição entram como "PAPEL/LONA/KRAFT/BARRICA"
+    // no breakdown — não viram lata, mas o operador vê que tem volume grande.
+    if (isVolDesc) {
+      hasVoluminousDesc = true;
+      const tag = item.description.match(/\bPAPEL[ÃA]O\b/i) ? "PAPEL"
+                : item.description.match(/\bLONA\b/i)       ? "LONA"
+                : item.description.match(/\bKRAFT\b/i)      ? "KRAFT"
+                : "BARRICA";
+      volumeBreakdown[tag] = (volumeBreakdown[tag] ?? 0) + item.quantity;
     }
   }
 
@@ -260,7 +303,39 @@ export function calculateDeliveryVolumeRules(items: EnrichedDeliveryItem[]): {
     totalLatas,
     hasHeavyUnit: heavyItems.length > 0,
     heavyItems,
+    volumeBreakdown,
+    hasVoluminousDesc,
   };
+}
+
+// ──────────────────────────────────────────────
+// FORMATTER PRA UI — converte breakdown em string legível
+//   { LA: 3, GL: 2 }     → "3 LA · 2 GL"
+//   {}                    → "0 volumes"
+//   { PAPEL: 1, LA: 5 }  → "5 LA · 1 papelão"
+// ──────────────────────────────────────────────
+
+const VOLUME_LABEL: Record<string, string> = {
+  LA: "LA", LAT: "LA",
+  GL: "GL", GAL: "GL",
+  BD: "BD", BAL: "BD",
+  LT: "LT",
+  BR: "BR",
+  PAPEL:   "papelão",
+  LONA:    "lona",
+  KRAFT:   "kraft",
+  BARRICA: "barrica",
+};
+
+export function formatVolumeBreakdown(breakdown: Record<string, number> | null | undefined): string {
+  if (!breakdown) return "0 volumes";
+  const parts = Object.entries(breakdown)
+    .filter(([, qty]) => qty > 0)
+    .map(([key, qty]) => {
+      const label = VOLUME_LABEL[key] ?? key.toLowerCase();
+      return `${qty} ${label}`;
+    });
+  return parts.length === 0 ? "0 volumes" : parts.join(" · ");
 }
 
 // ──────────────────────────────────────────────
@@ -326,6 +401,10 @@ export interface DeliveryStockResult {
   totalWeightKg:         number;
   totalLatas:            number;
   hasHeavyUnit:          boolean;
+  /** Breakdown por sigla pra UI: { LA: 3, GL: 2, PAPEL: 1 } */
+  volumeBreakdown:       Record<string, number>;
+  /** true se algum item tem papelão/lona/kraft/barrica na descrição */
+  hasVoluminousDesc:     boolean;
   hasMissingWeights:     boolean;
   missingWeightCodes:    string[];
   stockValidationStatus: StockValidationStatus;
@@ -364,7 +443,7 @@ export async function enrichDeliveryRequestStock(
 
   // 3. Calcula totais
   const { totalWeightKg, hasMissingWeights, missingWeightCodes } = calculateDeliveryWeight(enrichedItems);
-  const { totalLatas, hasHeavyUnit } = calculateDeliveryVolumeRules(enrichedItems);
+  const { totalLatas, hasHeavyUnit, volumeBreakdown, hasVoluminousDesc } = calculateDeliveryVolumeRules(enrichedItems);
 
   // 4. Status consolidado
   const stockValidationStatus = validateStockAvailability(enrichedItems);
@@ -381,6 +460,8 @@ export async function enrichDeliveryRequestStock(
     totalWeightKg,
     totalLatas,
     hasHeavyUnit,
+    volumeBreakdown,
+    hasVoluminousDesc,
     hasMissingWeights,
     missingWeightCodes,
     stockValidationStatus,

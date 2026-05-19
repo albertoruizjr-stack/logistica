@@ -7,11 +7,12 @@ import { createWave, listWaves } from "@/services/routing-wave.service";
 const ALLOWED_ROLES = ["ADMIN", "OPERATOR", "LOGISTICS_OPERATOR"];
 
 const createWaveSchema = z.object({
-  name:               z.string().min(1).max(100),
-  date:               z.string().datetime().or(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)),
-  deliveryRequestIds: z.array(z.string()).min(1),
-  driverIds:          z.array(z.string()).min(1),
-  notes:              z.string().optional(),
+  name:                z.string().min(1).max(100),
+  date:                z.string().datetime().or(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)),
+  deliveryRequestIds:  z.array(z.string()).min(1),
+  driverIds:           z.array(z.string()).min(1),
+  notes:               z.string().optional(),
+  bypassCapacityCheck: z.boolean().optional(),
 });
 
 export async function POST(req: NextRequest) {
@@ -38,12 +39,13 @@ export async function POST(req: NextRequest) {
     const normalizedDate = new Date(`${dateOnly}T12:00:00.000Z`);
 
     const wave = await createWave({
-      name:               parsed.data.name,
-      date:               normalizedDate,
-      createdById:        session.userId,
-      deliveryRequestIds: parsed.data.deliveryRequestIds,
-      driverIds:          parsed.data.driverIds,
-      notes:              parsed.data.notes,
+      name:                parsed.data.name,
+      date:                normalizedDate,
+      createdById:         session.userId,
+      deliveryRequestIds:  parsed.data.deliveryRequestIds,
+      driverIds:           parsed.data.driverIds,
+      notes:               parsed.data.notes,
+      bypassCapacityCheck: parsed.data.bypassCapacityCheck,
     });
 
     return NextResponse.json(apiSuccess(wave), { status: 201 });

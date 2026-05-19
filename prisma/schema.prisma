@@ -486,7 +486,10 @@ model DeliveryRequest {
   nfLinkError         String?            // PARTIAL_BILLING | MULTIPLE_NF | API_ERROR
   // totais calculados a partir do snapshot Citel (preenchidos na criação)
   totalWeightKg        Float?            // soma de grossWeight * quantity de todos os itens
-  totalLatas           Int?              // quantidade de itens em unidade BD/GL/LT
+  totalLatas           Int?              // quantidade de itens em unidade BD/GL/LT/LA/BR
+  // Breakdown detalhado de volumes pra UI: { LA: 3, GL: 2, PAPEL: 1 }.
+  // Permite mostrar "3 LA · 2 GL · 1 papelão" em vez de só "5 latas".
+  volumeBreakdown      Json?
   hasMissingWeights    Boolean @default(false) // algum item veio sem pesoBruto da Citel
   stockValidationStatus String?          // VALIDATED | PARTIAL | UNAVAILABLE | CITEL_DOWN | PENDING
   stockFetchedAt        DateTime?         // quando o snapshot Citel foi consultado
@@ -798,6 +801,9 @@ model Driver {
   email         String?  // necessário pra criar no Spoke
   storeId       String
   vehicleType   String? // moto, carro, van, caminhão
+  // Capacidade individual em kg. Quando null, usa VEHICLE_CAPACITY[vehicleType]
+  // como default. Permite ter dois "FIORINOs" com capacidades diferentes.
+  maxLoadKg     Float?
   licensePlate  String?
   spokeDriverId String?  @unique  // "drivers/abc..." retornado pelo Spoke
   // userId: User com role=DRIVER que faz login no app motorista

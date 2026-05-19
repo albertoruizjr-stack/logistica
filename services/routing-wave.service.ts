@@ -80,6 +80,9 @@ interface CreateWaveInput {
   deliveryRequestIds:  string[];
   driverIds:           string[];
   notes?:              string;
+  // Quando true, ignora validação de peso × capacidade dos motoristas.
+  // O operador toma a decisão consciente de exceder. Auditado em metadata.
+  bypassCapacityCheck?: boolean;
 }
 
 interface WaveMetadata {
@@ -87,6 +90,25 @@ interface WaveMetadata {
   deliveryRequestIds:  string[];
   optimizeOperationId?: string;
   stopMap?:            Record<string, string>; // spokeStopId → deliveryRequestId
+  // Snapshot da decisão de capacidade no momento da criação.
+  capacityCheck?: {
+    totalWeightKg:   number;
+    totalCapacityKg: number;
+    exceededBy:      number;
+    bypassed:        boolean;
+  };
+}
+
+// Default por tipo de veículo (mantém igual ao resolveDefaultCapacityKg do client).
+function defaultCapacityForType(vehicleType: string | null): number {
+  if (!vehicleType) return 500;
+  const n = vehicleType.toUpperCase().trim();
+  if (n.includes("MOTO"))    return 30;
+  if (n.includes("FIORINO")) return 750;
+  if (n.includes("VAN"))     return 800;
+  if (n.includes("CAMINH"))  return 1650;
+  if (n.includes("CARRO"))   return 200;
+  return 500;
 }
 
 export async function createWave(input: CreateWaveInput) {
@@ -103,7 +125,7 @@ export async function createWave(input: CreateWaveInput) {
   // Valida solicitações: precisam estar em PRONTO_ROTEIRIZACAO e ter endereço
   const requests = await prisma.deliveryRequest.findMany({
     where:  { id: { in: input.deliveryRequestIds } },
-    select: { id: true, status: true, deliveryAddress: true, orderNumber: true },
+    select: { id: true, status: true, deliveryAddress: true, orderNumber: true, totalWeightKg: true },
   });
 
   if (requests.length !== input.deliveryRequestIds.length) {
@@ -118,9 +140,33 @@ export async function createWave(input: CreateWaveInput) {
     throw new Error(`Solicitações não elegíveis para roteirização: ${ids}`);
   }
 
+  // Validação de capacidade × peso. Cliente já valida pra UX, aqui é defesa em profundidade.
+  const driversWithCapacity = await prisma.driver.findMany({
+    where:  { id: { in: input.driverIds } },
+    select: { id: true, name: true, vehicleType: true, maxLoadKg: true },
+  });
+  const totalCapacityKg = driversWithCapacity.reduce(
+    (acc, d) => acc + (d.maxLoadKg ?? defaultCapacityForType(d.vehicleType)),
+    0,
+  );
+  const totalWeightKg = requests.reduce((acc, r) => acc + (r.totalWeightKg ?? 0), 0);
+  const exceededBy = Math.max(0, totalWeightKg - totalCapacityKg);
+
+  if (exceededBy > 0 && !input.bypassCapacityCheck) {
+    throw new Error(
+      `Carga (${totalWeightKg.toFixed(1)} kg) excede capacidade dos motoristas selecionados (${totalCapacityKg.toFixed(0)} kg) em ${exceededBy.toFixed(1)} kg. Marque "Liberar mesmo assim" pra prosseguir.`,
+    );
+  }
+
   const metadata: WaveMetadata = {
     driverIds:          input.driverIds,
     deliveryRequestIds: input.deliveryRequestIds,
+    capacityCheck: {
+      totalWeightKg,
+      totalCapacityKg,
+      exceededBy,
+      bypassed: exceededBy > 0,
+    },
   };
 
   return prisma.routingWave.create({

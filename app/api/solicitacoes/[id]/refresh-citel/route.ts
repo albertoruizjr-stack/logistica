@@ -113,6 +113,7 @@ export async function POST(
         data: {
           totalWeightKg:         citelResult.totalWeightKg,
           totalLatas:            citelResult.totalLatas,
+          volumeBreakdown:       citelResult.volumeBreakdown ?? undefined,
           hasMissingWeights:     citelResult.hasMissingWeights,
           stockValidationStatus: citelResult.stockValidationStatus,
           stockFetchedAt:        new Date(),

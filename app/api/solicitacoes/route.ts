@@ -258,6 +258,7 @@ export async function POST(req: NextRequest) {
         // totais calculados pelo snapshot Citel
         totalWeightKg:         citelResult?.totalWeightKg ?? null,
         totalLatas:            citelResult?.totalLatas    ?? null,
+        volumeBreakdown:       citelResult?.volumeBreakdown ?? undefined,
         hasMissingWeights:     citelResult?.hasMissingWeights ?? false,
         stockValidationStatus: citelDown ? "CITEL_DOWN" : (citelResult?.stockValidationStatus ?? "PENDING"),
         stockFetchedAt:        citelResult ? new Date() : null,

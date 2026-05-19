@@ -9,8 +9,26 @@ import { cn, formatRelativeTime } from "@/lib/utils";
 import NovaWaveForm from "./_components/nova-wave-form";
 import SyncDriversButton from "./_components/sync-drivers-button";
 import DeleteWaveButton from "./_components/delete-wave-button";
+import { VEHICLE_CAPACITY } from "@/services/citel-stock.service";
 
 const ALLOWED_ROLES = ["ADMIN", "OPERATOR", "LOGISTICS_OPERATOR"];
+
+// Resolve capacidade default por tipo (quando Driver.maxLoadKg é null).
+// Aceita variações: "moto", "Moto", "MOTO" → MOTO, "fiorino"/"FIORINO" → FIORINO, etc.
+function resolveDefaultCapacityKg(vehicleType: string | null): number {
+  if (!vehicleType) return 500;
+  const normalized = vehicleType.toUpperCase().trim();
+  // mapeia variações comuns
+  const key =
+    normalized.includes("MOTO")     ? "MOTO"     :
+    normalized.includes("FIORINO")  ? "FIORINO"  :
+    normalized.includes("VAN")      ? "VAN"      :
+    normalized.includes("CAMINH")   ? "CAMINHAO" :
+    normalized.includes("CARRO")    ? "CARRO"    :
+    null;
+  if (!key) return 500;
+  return VEHICLE_CAPACITY[key as keyof typeof VEHICLE_CAPACITY].maxWeightKg;
+}
 
 const WAVE_STATUS_COLORS: Record<string, { bg: string; text: string; label: string }> = {
   DRAFT:       { bg: "bg-gray-100",   text: "text-gray-700",   label: "Rascunho" },
@@ -42,6 +60,7 @@ export default async function RoteirizacaoPage() {
         deliveryCity:    true,
         totalWeightKg:   true,
         totalLatas:      true,
+        volumeBreakdown: true,
       },
       orderBy: { createdAt: "asc" },
       take: 200,
@@ -52,6 +71,7 @@ export default async function RoteirizacaoPage() {
         id:            true,
         name:          true,
         vehicleType:   true,
+        maxLoadKg:     true,
         spokeDriverId: true,
         email:         true,
       },
@@ -82,11 +102,16 @@ export default async function RoteirizacaoPage() {
           </h2>
           <NovaWaveForm
             suggestedName={suggestedName}
-            eligibleRequests={eligibleRequests}
+            eligibleRequests={eligibleRequests.map((r) => ({
+              ...r,
+              volumeBreakdown: (r.volumeBreakdown as Record<string, number> | null) ?? null,
+            }))}
             availableDrivers={availableDrivers.map((d) => ({
               id:          d.id,
               name:        d.name,
               vehicleType: d.vehicleType,
+              // Resolve capacidade: maxLoadKg do banco > default por vehicleType > 500 genérico.
+              maxLoadKg:   d.maxLoadKg ?? resolveDefaultCapacityKg(d.vehicleType),
               hasSpokeId:  Boolean(d.spokeDriverId),
               hasEmail:    Boolean(d.email),
             }))}

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2, Play, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { formatVolumeBreakdown } from "@/services/citel-stock.service";
 
 interface EligibleRequest {
   id:               string;
@@ -14,12 +15,15 @@ interface EligibleRequest {
   deliveryCity:     string | null;
   totalWeightKg:    number | null;
   totalLatas:       number | null;
+  volumeBreakdown:  Record<string, number> | null;
 }
 
 interface AvailableDriver {
   id:           string;
   name:         string;
   vehicleType:  string | null;
+  // Capacidade efetiva em kg. Já vem resolvida (maxLoadKg do banco ou default por tipo).
+  maxLoadKg:    number;
   hasSpokeId:   boolean;
   hasEmail:     boolean;
 }
@@ -64,6 +68,20 @@ export default function NovaWaveForm({
   const [submitting, setSubmitting] = useState(false);
   const [error,      setError]      = useState<string | null>(null);
   const [progress,   setProgress]   = useState<WaveProgress | null>(null);
+  // Quando peso total excede capacidade, operador precisa marcar pra liberar.
+  const [bypassCapacity, setBypassCapacity] = useState(false);
+
+  // Capacidade selecionada × peso total das DRs selecionadas
+  const totalWeightKg = Array.from(reqIds).reduce((acc, id) => {
+    const r = eligibleRequests.find((x) => x.id === id);
+    return acc + (r?.totalWeightKg ?? 0);
+  }, 0);
+  const totalCapacityKg = Array.from(drvIds).reduce((acc, id) => {
+    const d = availableDrivers.find((x) => x.id === id);
+    return acc + (d?.maxLoadKg ?? 0);
+  }, 0);
+  const exceedsCapacity = drvIds.size > 0 && totalWeightKg > totalCapacityKg;
+  const excessKg = exceedsCapacity ? Math.round((totalWeightKg - totalCapacityKg) * 10) / 10 : 0;
 
   // Polling: enquanto progress não estiver terminal, chamar /advance a cada 3s
   useEffect(() => {
@@ -119,9 +137,10 @@ export default function NovaWaveForm({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name,
-          date:               new Date(date).toISOString(),
-          deliveryRequestIds: Array.from(reqIds),
-          driverIds:          Array.from(drvIds),
+          date:                new Date(date).toISOString(),
+          deliveryRequestIds:  Array.from(reqIds),
+          driverIds:           Array.from(drvIds),
+          bypassCapacityCheck: exceedsCapacity ? bypassCapacity : undefined,
         }),
       });
       const json = await res.json();
@@ -146,7 +165,12 @@ export default function NovaWaveForm({
   }
 
   const driversBlocked = availableDrivers.filter((d) => !d.hasEmail);
-  const canSubmit = reqIds.size > 0 && drvIds.size > 0 && name.trim().length > 0;
+  // Bloqueia submit quando peso excede capacidade — exceto se operador marcou "liberar".
+  const canSubmit =
+    reqIds.size > 0 &&
+    drvIds.size > 0 &&
+    name.trim().length > 0 &&
+    (!exceedsCapacity || bypassCapacity);
 
   // Wave em progresso → mostra apenas o painel de progresso
   if (progress) {
@@ -290,7 +314,11 @@ export default function NovaWaveForm({
                     </p>
                   </div>
                   <div className="flex-shrink-0 text-right text-[11px] text-gray-400">
-                    {r.totalLatas != null && <p>{r.totalLatas} latas</p>}
+                    {r.volumeBreakdown && Object.keys(r.volumeBreakdown).length > 0 ? (
+                      <p>{formatVolumeBreakdown(r.volumeBreakdown)}</p>
+                    ) : r.totalLatas && r.totalLatas > 0 ? (
+                      <p>{r.totalLatas} volumes</p>
+                    ) : null}
                     {r.totalWeightKg != null && <p>{r.totalWeightKg.toFixed(0)} kg</p>}
                   </div>
                 </button>
@@ -299,6 +327,54 @@ export default function NovaWaveForm({
           </div>
         )}
       </div>
+
+      {/* Resumo de capacidade — só aparece quando há motoristas selecionados */}
+      {drvIds.size > 0 && (
+        <div className={cn(
+          "rounded-lg px-3 py-2.5 text-sm border",
+          exceedsCapacity
+            ? "bg-amber-50 border-amber-300 text-amber-900"
+            : "bg-gray-50 border-gray-200 text-gray-700"
+        )}>
+          <div className="flex items-center gap-2 mb-1">
+            {exceedsCapacity
+              ? <AlertTriangle className="w-4 h-4 text-amber-600" />
+              : <CheckCircle2 className="w-4 h-4 text-gray-500" />}
+            <p className="font-semibold text-xs">
+              {exceedsCapacity
+                ? `Carga excede capacidade dos motoristas em ${excessKg.toFixed(1)} kg`
+                : "Carga dentro da capacidade"}
+            </p>
+          </div>
+          <p className="text-[11px] ml-6">
+            Peso total: <strong>{totalWeightKg.toFixed(1)} kg</strong>
+            {" "}· Capacidade selecionada: <strong>{totalCapacityKg.toFixed(0)} kg</strong>
+            {" "}({Array.from(drvIds).map((id) => {
+              const d = availableDrivers.find((x) => x.id === id);
+              return d ? `${d.name.split(" ")[0]} ${d.maxLoadKg}kg` : "";
+            }).filter(Boolean).join(" + ")})
+          </p>
+
+          {exceedsCapacity && (
+            <div className="mt-2 pt-2 border-t border-amber-200 space-y-1.5">
+              <p className="text-[11px] ml-6">
+                Adicione outro motorista ou remova entregas pra resolver — ou:
+              </p>
+              <label className="flex items-start gap-2 ml-6 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={bypassCapacity}
+                  onChange={(e) => setBypassCapacity(e.target.checked)}
+                  className="mt-0.5 w-3.5 h-3.5 accent-amber-600"
+                />
+                <span className="text-[11px]">
+                  <strong>Liberar mesmo assim</strong> — assumo a responsabilidade de exceder a capacidade.
+                </span>
+              </label>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Erro */}
       {error && (
