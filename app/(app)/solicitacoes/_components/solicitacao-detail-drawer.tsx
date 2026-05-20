@@ -94,11 +94,14 @@ interface TransferSummary {
   }[];
 }
 
-const TRANSFER_STATUS_LABEL: Record<TransferSummary["status"], { label: string; color: string; bg: string }> = {
+const TRANSFER_STATUS_FALLBACK = { label: "—", color: "#525252", bg: "rgba(115,115,115,0.12)" };
+
+const TRANSFER_STATUS_LABEL: Record<string, { label: string; color: string; bg: string }> = {
   PENDING:    { label: "Aguardando confirmação no Autcom", color: "#92400E", bg: "rgba(217,119,6,0.12)"  },
   APPROVED:   { label: "Confirmada · aguardando coleta",   color: "#1E40AF", bg: "rgba(37,99,235,0.12)"  },
   PREPARING:  { label: "Em separação na loja origem",      color: "#1E40AF", bg: "rgba(37,99,235,0.12)"  },
-  DISPATCHED: { label: "Em trânsito",                      color: "#155E75", bg: "rgba(8,145,178,0.12)"  },
+  PREPARED:   { label: "Separada · aguardando coleta",     color: "#0F766E", bg: "rgba(20,184,166,0.12)" },
+  IN_TRANSIT: { label: "Em trânsito",                      color: "#155E75", bg: "rgba(8,145,178,0.12)"  },
   RECEIVED:   { label: "Recebida",                         color: "#15803D", bg: "rgba(22,163,74,0.12)"  },
   CANCELLED:  { label: "Cancelada",                        color: "#991B1B", bg: "rgba(220,38,38,0.12)"  },
 };
@@ -694,7 +697,7 @@ export function SolicitacaoDetailDrawer({ requestId, onClose }: Props) {
                   <SectionTitle icon={ArrowLeftRight} label={`Transferências (${data.transfers.length})`} color="#D97706" />
                   <div className="space-y-2">
                     {data.transfers.map(t => {
-                      const tconf = TRANSFER_STATUS_LABEL[t.status];
+                      const tconf = TRANSFER_STATUS_LABEL[t.status] ?? TRANSFER_STATUS_FALLBACK;
                       const canLink = ["ADMIN", "OPERATOR", "STOCK_OPERATOR", "LOGISTICS_OPERATOR", "STORE_LEADER"].includes(data.currentUserRole);
                       const linkedCount = t.items.filter(i => i.linkedCitelPD !== null).length;
                       const allLinked = linkedCount === t.items.length && t.items.length > 0;
