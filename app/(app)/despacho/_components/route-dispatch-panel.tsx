@@ -5,12 +5,7 @@ import { useRouter } from "next/navigation";
 import { Loader2, Printer, Truck, MapPin, Clock, AlertTriangle, CheckCircle2, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatVolumeBreakdown } from "@/services/citel-stock.service";
-
-interface SequenceStop {
-  stopPosition:      number | null;
-  deliveryRequestId: string;
-  eta:               number | null;
-}
+import { isManualStop, type RouteSequenceEntry } from "@/lib/route-sequence";
 
 interface StopMeta {
   deliveryRequestId: string;
@@ -35,7 +30,7 @@ interface Props {
     stopCount:         number | null;
     totalWeightKg:     number | null;
     estimatedReturnAt: string | null;
-    sequenceJson:      SequenceStop[] | null;
+    sequenceJson:      RouteSequenceEntry[] | null;
   };
   stopsMeta: StopMeta[];
 }
@@ -171,7 +166,25 @@ export default function RouteDispatchPanel({ route, stopsMeta }: Props) {
       {/* Manifest — sequência de paradas */}
       <ol className="divide-y divide-gray-100">
         {orderedStops.map((stop, idx) => {
-          const meta = stopsMetaMap.get(stop.deliveryRequestId);
+          // Parada manual (visita a loja / endereço extra) — não tem entrega vinculada.
+          if (isManualStop(stop)) {
+            return (
+              <li key={stop.stopId ?? `manual-${idx}`} className="px-5 py-3 flex items-start gap-3 text-sm bg-amber-50/40">
+                <span className="w-7 h-7 rounded-full bg-amber-100 text-amber-700 text-xs font-bold flex items-center justify-center flex-shrink-0 print:border print:border-black print:bg-white print:text-black">
+                  {stop.stopPosition ?? idx + 1}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold text-amber-800 truncate">
+                    {stop.type === "STORE_VISIT" ? "Visita à loja" : "Parada extra"}
+                    {stop.notes ? ` · ${stop.notes}` : ""}
+                  </p>
+                  <p className="text-xs text-gray-500 truncate">{stop.address ?? "—"}</p>
+                </div>
+              </li>
+            );
+          }
+
+          const meta = stopsMetaMap.get(stop.deliveryRequestId!);
           return (
             <li key={`${stop.deliveryRequestId}-${idx}`} className="px-5 py-3 flex items-start gap-3 text-sm">
               <span className="w-7 h-7 rounded-full bg-orange-100 text-orange-700 text-xs font-bold flex items-center justify-center flex-shrink-0 print:border print:border-black print:bg-white print:text-black">
@@ -183,7 +196,7 @@ export default function RouteDispatchPanel({ route, stopsMeta }: Props) {
                     ? `NF ${meta.invoiceNumber}`
                     : meta?.orderNumber
                       ? `PD ${meta.orderNumber}`
-                      : `#${stop.deliveryRequestId.slice(-6)}`}
+                      : `#${stop.deliveryRequestId!.slice(-6)}`}
                   {meta && ` · ${meta.customerName}`}
                 </p>
                 <p className="text-xs text-gray-500 truncate">

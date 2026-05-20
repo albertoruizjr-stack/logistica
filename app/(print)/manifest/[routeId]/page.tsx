@@ -2,14 +2,9 @@ import { redirect, notFound } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import PrintTrigger from "./_components/print-trigger";
+import { extractDeliveryRequestIds, isManualStop, type RouteSequenceEntry } from "@/lib/route-sequence";
 
 const ALLOWED_ROLES = ["ADMIN", "OPERATOR", "STOCK_OPERATOR", "LOGISTICS_OPERATOR", "STORE_LEADER"];
-
-interface SequenceStop {
-  stopPosition:      number | null;
-  deliveryRequestId: string;
-  eta:               string | number | null;
-}
 
 export default async function ManifestPrintPage({
   params,
@@ -29,8 +24,9 @@ export default async function ManifestPrintPage({
   });
   if (!route) notFound();
 
-  const sequence = (route.sequenceJson as unknown as SequenceStop[] | null) ?? [];
-  const drIds = sequence.map((s) => s.deliveryRequestId);
+  const sequence = (route.sequenceJson as unknown as RouteSequenceEntry[] | null) ?? [];
+  // Descarta paradas manuais (sem deliveryRequestId) antes do prisma { id: { in } }.
+  const drIds = extractDeliveryRequestIds(sequence);
 
   const stopsMeta = drIds.length > 0
     ? await prisma.deliveryRequest.findMany({
@@ -116,14 +112,38 @@ export default async function ManifestPrintPage({
             </li>
           )}
           {ordered.map((stop, idx) => {
-            const meta = metaMap.get(stop.deliveryRequestId);
+            // Parada manual (visita a loja / endereço extra) — não tem entrega vinculada.
+            if (isManualStop(stop)) {
+              return (
+                <li
+                  key={stop.stopId ?? `manual-${idx}`}
+                  className="grid grid-cols-[3rem_1fr_8rem] gap-3 px-4 py-3 border-b border-gray-300 last:border-b-0 break-inside-avoid"
+                >
+                  <div className="flex items-center justify-center">
+                    <span className="w-10 h-10 rounded-full border-2 border-black text-black text-base font-bold flex items-center justify-center">
+                      {stop.stopPosition ?? idx + 1}
+                    </span>
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-base font-bold">
+                      {stop.type === "STORE_VISIT" ? "Visita à loja" : "Parada extra"}
+                      {stop.notes && <span className="ml-2 font-normal text-gray-800">· {stop.notes}</span>}
+                    </p>
+                    <p className="text-sm text-gray-800 mt-0.5">{stop.address ?? "—"}</p>
+                  </div>
+                  <div className="text-right text-xs text-gray-700" />
+                </li>
+              );
+            }
+
+            const meta = metaMap.get(stop.deliveryRequestId!);
             // Regra: depois que NF é vinculada, o documento físico que vai com a carga é a NF.
             // Sem NF, mostra o PD como referência interna.
             const docLabel = meta?.invoiceNumber
               ? `NF ${meta.invoiceNumber}`
               : meta?.orderNumber
                 ? `PD ${meta.orderNumber}`
-                : `#${stop.deliveryRequestId.slice(-6)}`;
+                : `#${stop.deliveryRequestId!.slice(-6)}`;
             const etaStr = stop.eta
               ? new Date(stop.eta).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
               : null;

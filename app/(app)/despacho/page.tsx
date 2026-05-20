@@ -11,12 +11,7 @@ import {
 import { DispatchActionPanel } from "@/components/despacho/dispatch-actions";
 import { PageHeader, MetricCard, EmptyState, AlertBanner } from "@/components/ui";
 import RouteDispatchPanel from "./_components/route-dispatch-panel";
-
-interface SequenceStop {
-  stopPosition:      number | null;
-  deliveryRequestId: string;
-  eta:               number | null;
-}
+import { extractDeliveryRequestIds, type RouteSequenceEntry } from "@/lib/route-sequence";
 
 export default async function DespachoPainel() {
   const session = await getSession();
@@ -52,10 +47,12 @@ export default async function DespachoPainel() {
     }),
   ]);
 
-  // Coleta metadados das DRs nas rotas ativas (uma query única)
+  // Coleta metadados das DRs nas rotas ativas (uma query única).
+  // extractDeliveryRequestIds descarta paradas manuais (sem deliveryRequestId) —
+  // mandar undefined pra dentro de { id: { in: [...] } } quebraria a query.
   const routeStopIds = activeRoutes.flatMap((r) => {
-    const seq = (r.sequenceJson as unknown as SequenceStop[] | null) ?? [];
-    return seq.map((s) => s.deliveryRequestId);
+    const seq = (r.sequenceJson as unknown as RouteSequenceEntry[] | null) ?? [];
+    return extractDeliveryRequestIds(seq);
   });
   const routeStopsMeta = routeStopIds.length > 0
     ? await prisma.deliveryRequest.findMany({
@@ -132,7 +129,7 @@ export default async function DespachoPainel() {
                 </span>
               </h2>
               {activeRoutes.map((route) => {
-                const seq = (route.sequenceJson as unknown as SequenceStop[] | null) ?? [];
+                const seq = (route.sequenceJson as unknown as RouteSequenceEntry[] | null) ?? [];
                 return (
                   <RouteDispatchPanel
                     key={route.id}

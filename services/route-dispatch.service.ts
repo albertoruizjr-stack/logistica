@@ -8,12 +8,7 @@
 import { prisma } from "@/lib/prisma";
 import { DispatchModal, DispatchStatus, type Prisma } from "@prisma/client";
 import { transitionDeliveryRequest } from "./state-machine.service";
-
-interface SequenceStop {
-  stopPosition:      number | null;
-  deliveryRequestId: string;
-  eta:               number | null;
-}
+import { extractDeliveryRequestIds, isManualStop, type RouteSequenceEntry } from "@/lib/route-sequence";
 
 export async function dispatchRoute(routeId: string, operatorId: string) {
   const route = await prisma.route.findUnique({
@@ -23,10 +18,12 @@ export async function dispatchRoute(routeId: string, operatorId: string) {
   if (!route) throw new Error("Rota não encontrada");
   if (route.status === "DISPATCHED") throw new Error("Rota já foi despachada");
 
-  const sequence = (route.sequenceJson as unknown as SequenceStop[] | null) ?? [];
+  const sequence = (route.sequenceJson as unknown as RouteSequenceEntry[] | null) ?? [];
   if (sequence.length === 0) throw new Error("Rota sem paradas — nada a despachar");
 
-  const drIds = sequence.map((s) => s.deliveryRequestId);
+  // Só entregas viram Dispatch; paradas manuais (visita a loja / endereço extra) são pontos
+  // de passagem sem solicitação vinculada — entram no roteiro mas não geram despacho.
+  const drIds = extractDeliveryRequestIds(sequence);
 
   // Validar que todas DRs existem e estão em ROTEIRIZADO
   const drs = await prisma.deliveryRequest.findMany({
@@ -50,9 +47,10 @@ export async function dispatchRoute(routeId: string, operatorId: string) {
   const dispatchIds: string[] = [];
   await prisma.$transaction(async (tx) => {
     for (const stop of sequence) {
+      if (isManualStop(stop)) continue; // parada manual não gera Dispatch
       const dispatch = await tx.dispatch.create({
         data: {
-          deliveryRequestId: stop.deliveryRequestId,
+          deliveryRequestId: stop.deliveryRequestId!,
           storeId,
           modal:          DispatchModal.INTERNAL_ROUTE,
           // Despachar = motorista já saiu, então cria direto em IN_TRANSIT.
@@ -84,16 +82,17 @@ export async function dispatchRoute(routeId: string, operatorId: string) {
   // A state machine não permite pular DISPATCHED (gate de auditoria), mas pro usuário
   // é uma única ação. Fora da transação porque a state machine cria a própria.
   for (const stop of sequence) {
+    if (isManualStop(stop)) continue; // parada manual não tem DR para transicionar
     try {
       await transitionDeliveryRequest({
-        requestId: stop.deliveryRequestId,
+        requestId: stop.deliveryRequestId!,
         actorId:   operatorId,
         actorRole: "LOGISTICS_OPERATOR",
         toStatus:  "DISPATCHED",
         metadata:  { routeId: route.id, dispatchedByRoute: true },
       });
       await transitionDeliveryRequest({
-        requestId: stop.deliveryRequestId,
+        requestId: stop.deliveryRequestId!,
         actorId:   operatorId,
         actorRole: "LOGISTICS_OPERATOR",
         toStatus:  "IN_TRANSIT",
@@ -141,8 +140,8 @@ export async function checkAndCompleteRoute(routeId: string) {
     return { skipped: true, reason: `Rota já em status ${route.status}` };
   }
 
-  const sequence = (route.sequenceJson as unknown as SequenceStop[] | null) ?? [];
-  const drIds = sequence.map((s) => s.deliveryRequestId);
+  const sequence = (route.sequenceJson as unknown as RouteSequenceEntry[] | null) ?? [];
+  const drIds = extractDeliveryRequestIds(sequence);
   if (drIds.length === 0) return { skipped: true, reason: "Rota sem paradas" };
 
   const drs = await prisma.deliveryRequest.findMany({
@@ -186,8 +185,8 @@ export async function deleteRoute(routeId: string, operatorId: string) {
     throw new Error(`Rota com status ${route.status} não pode ser excluída — use cancelamento de despacho.`);
   }
 
-  const sequence = (route.sequenceJson as unknown as SequenceStop[] | null) ?? [];
-  const drIds = sequence.map((s) => s.deliveryRequestId);
+  const sequence = (route.sequenceJson as unknown as RouteSequenceEntry[] | null) ?? [];
+  const drIds = extractDeliveryRequestIds(sequence);
 
   // Deleta a Route + libera motorista (transação atômica)
   await prisma.$transaction(async (tx) => {
