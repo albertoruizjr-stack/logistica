@@ -439,6 +439,39 @@ async function distributeWave(waveId: string) {
       }
     }
 
+    // 5b. RECONCILIAÇÃO — nenhuma entrega pode sumir.
+    // Confere que TODA DR selecionada entrou em alguma rota. Se faltar, aplica a
+    // política definida em decideOnMissingDeliveries (decisão de negócio — ver função).
+    const selectedDrIds = meta.deliveryRequestIds;
+    const routedDrIds   = Array.from(requestToRouteMap.keys());
+    const missingDrIds  = selectedDrIds.filter((id) => !requestToRouteMap.has(id));
+
+    // Aviso persistido na onda quando entregas ficam de fora (visível na tela de detalhe).
+    let distributionWarning: { missingCount: number; selectedCount: number; missingDrIds: string[] } | null = null;
+
+    if (missingDrIds.length > 0) {
+      const decision = decideOnMissingDeliveries(selectedDrIds, routedDrIds, missingDrIds);
+      if (decision.action === "fail") {
+        // Desfaz as rotas recém-criadas pra não despachar onda incompleta.
+        // (As DRs ainda NÃO foram transicionadas — isso só acontece depois deste bloco —
+        //  então basta apagar os Route recém-criados; nada mais aponta pra eles.)
+        if (createdRouteIds.length > 0) {
+          await prisma.route.deleteMany({ where: { id: { in: createdRouteIds } } });
+        }
+        return markFailed(waveId, decision.message);
+      }
+      // action === "proceed": segue distribuindo o que deu certo, mas registra aviso.
+      // As entregas órfãs também aparecem na tela de detalhe da wave (getWaveDetail → orphans).
+      distributionWarning = {
+        missingCount:  missingDrIds.length,
+        selectedCount: selectedDrIds.length,
+        missingDrIds,
+      };
+      console.warn(
+        `[routing-wave] wave ${waveId}: ${missingDrIds.length}/${selectedDrIds.length} entrega(s) sem rota — prosseguindo. IDs: ${missingDrIds.join(", ")}`,
+      );
+    }
+
     // 5. Atualiza DeliveryRequests para ROTEIRIZADO
     for (const [drId, routeId] of requestToRouteMap.entries()) {
       try {
@@ -454,17 +487,45 @@ async function distributeWave(waveId: string) {
       }
     }
 
-    // 6. Marca wave como DISTRIBUTED
+    // 6. Marca wave como DISTRIBUTED (grava o aviso de distribuição, se houver)
     return prisma.routingWave.update({
       where: { id: waveId },
       data: {
         status:        RoutingWaveStatus.DISTRIBUTED,
         distributedAt: new Date(),
+        ...(distributionWarning
+          ? { metadata: { ...meta, distributionWarning } as unknown as Prisma.InputJsonValue }
+          : {}),
       },
     });
   } catch (err) {
     return markFailed(waveId, errToString(err));
   }
+}
+
+// ──────────────────────────────────────────────
+// POLÍTICA DE RECONCILIAÇÃO  ←  DECISÃO DE NEGÓCIO (Alberto)
+// ──────────────────────────────────────────────
+// Chamada quando, após a distribuição, alguma entrega selecionada NÃO entrou
+// em nenhuma rota (ex.: 14 selecionadas, só 13 roteadas).
+//
+// Política escolhida pelo Alberto: "proceed" — despacha o que deu certo e deixa as
+// entregas órfãs visíveis na tela de detalhe da wave (getWaveDetail → orphans) pra
+// serem re-roteirizadas. Menos disruptivo que falhar a onda inteira.
+//
+// Alternativas (caso mude de ideia):
+//   "fail"    → falha a onda inteira, apaga as rotas criadas, operador refaz tudo.
+//   híbrido   → falhar só se faltar mais de X%; senão prosseguir.
+type MissingDeliveryDecision =
+  | { action: "fail"; message: string }
+  | { action: "proceed" };
+
+function decideOnMissingDeliveries(
+  selectedDrIds: string[],
+  routedDrIds:   string[],
+  missingDrIds:  string[],
+): MissingDeliveryDecision {
+  return { action: "proceed" };
 }
 
 // ──────────────────────────────────────────────

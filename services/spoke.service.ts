@@ -277,9 +277,31 @@ export async function getRoute(routeId: string): Promise<SpokeRoute> {
 // Lista todos os stops de um plan distribuído. Inclui driverIdentifier + stopPosition + eta.
 // Mais confiável que iterar GET /plans/X/routes/Y individualmente (que pode dar 404 em rotas
 // recém-distribuídas pelo Spoke).
+//
+// ATENÇÃO: o Spoke/Circuit limita esta resposta a no máximo 10 stops por página
+// (maxPageSize máx. = 10) e devolve nextPageToken quando há mais. Precisamos seguir
+// a paginação até o fim — senão entregas somem em qualquer wave com >10 stops
+// (14 entregas + paradas de depósito já estoura uma página).
 export async function listPlanStops(planId: string): Promise<SpokeStop[]> {
-  const res = await call<{ stops?: SpokeStop[] }>("GET", `/${planId}/stops`);
-  return res.stops ?? [];
+  const all: SpokeStop[] = [];
+  let pageToken: string | undefined;
+
+  // Guard contra loop infinito: 100 páginas × 10 = 1000 stops, muito além de qualquer wave real.
+  for (let page = 0; page < 100; page++) {
+    const query = new URLSearchParams({ maxPageSize: "10" });
+    if (pageToken) query.set("pageToken", pageToken);
+
+    const res = await call<{ stops?: SpokeStop[]; nextPageToken?: string }>(
+      "GET",
+      `/${planId}/stops?${query.toString()}`,
+    );
+
+    if (res.stops) all.push(...res.stops);
+    if (!res.nextPageToken) break;
+    pageToken = res.nextPageToken;
+  }
+
+  return all;
 }
 
 // ──────────────────────────────────────────────
