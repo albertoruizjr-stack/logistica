@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { DispatchStatus } from "@prisma/client";
 import { MapPin } from "lucide-react";
 import { DriverCards, type DriverCardData } from "@/components/rastreamento/driver-cards";
+import { LalamoveTrackingCards, type LalamoveRide } from "@/components/rastreamento/lalamove-tracking-cards";
 import ResyncRoutesButton from "@/components/rastreamento/resync-routes-button";
 import { PageHeader } from "@/components/ui";
 
@@ -172,6 +173,23 @@ export default async function RastreamentoPage() {
     };
   });
 
+  // Corridas Lalamove ativas — alimentadas pelo webhook (status/motorista/preço)
+  const lalamoveOrders = await prisma.lalamoveOrder.findMany({
+    where: { internalStatus: { in: [DispatchStatus.PENDING, DispatchStatus.ASSIGNED, DispatchStatus.IN_TRANSIT] } },
+    include: { dispatch: { include: { deliveryRequest: { select: { customerName: true, customerPhone: true, deliveryAddress: true } } } } },
+    orderBy: { createdAt: "desc" },
+  });
+  const rides: LalamoveRide[] = lalamoveOrders.map((o) => ({
+    orderId: o.lalamoveOrderId,
+    vehicle: o.dispatch?.notes?.match(/LALAPRO|UV_FIORINO|VAN|TRUCK330|TRUCK3_5T/)?.[0] ?? "LALAPRO",
+    status: o.status,
+    driverName: o.driverName, driverPhone: o.driverPhone, driverPlate: o.driverPlate,
+    price: o.finalPrice ?? o.estimatedPrice, shareLink: o.shareLink,
+    customerName: o.dispatch?.deliveryRequest?.customerName ?? "Cliente",
+    customerPhone: o.dispatch?.deliveryRequest?.customerPhone ?? null,
+    address: o.dispatch?.deliveryRequest?.deliveryAddress ?? "",
+  }));
+
   const totalActive = driverData.filter(
     (d) => !d.available || d.activeDispatches.length > 0
   ).length;
@@ -201,6 +219,13 @@ export default async function RastreamentoPage() {
       />
 
       <DriverCards initialDrivers={driverData} />
+
+      <section className="mt-8">
+        <h2 className="text-xs font-semibold text-gray-400 uppercase mb-3">
+          Corridas Lalamove{rides.length > 0 ? ` (${rides.length})` : ""}
+        </h2>
+        <LalamoveTrackingCards rides={rides} />
+      </section>
     </div>
   );
 }
