@@ -4,7 +4,7 @@ import { getSessionFromRequest } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/types";
 import { transitionDeliveryRequest } from "@/services/state-machine.service";
 import { uploadProofPhoto, isStorageConfigured } from "@/lib/supabase-storage";
-import { checkAndCompleteRouteFromDeliveryRequest, ensureDeliveryInTransit } from "@/services/route-dispatch.service";
+import { checkAndCompleteRouteFromDeliveryRequest, ensureDeliveryInTransit, completeDispatchForDelivery } from "@/services/route-dispatch.service";
 import { isDeliveryAssignedToDriver } from "@/lib/driver-ownership";
 import { isDeliveryPhotoRequired } from "@/services/system-config.service";
 
@@ -136,6 +136,9 @@ export async function POST(
       toStatus:  "DELIVERED",
       metadata:  { reason: "Entrega confirmada pelo motorista com fotos" },
     });
+
+    // Fecha o despacho (senão fica IN_TRANSIT e a entrega entregue continua aparecendo em "Em rota agora").
+    await completeDispatchForDelivery(dr.id);
 
     // Se foi a última DR da rota, fecha a rota e libera o motorista.
     // Erro aqui não invalida a entrega — apenas loga.

@@ -140,7 +140,25 @@ export async function markDeliveredByOperator(
       metadata: { manualByOperator: true, autoAdvance: true, reason: "Entrega finalizada manualmente pelo operador" },
     });
   }
+  await completeDispatchForDelivery(deliveryRequestId);
   return { from: dr.status, advanced: path };
+}
+
+// ──────────────────────────────────────────────
+// FECHAR O DESPACHO AO ENTREGAR
+// Quando a entrega vira DELIVERED, o Dispatch ligado a ela precisa virar COMPLETED.
+// Sem isto, o despacho ficava IN_TRANSIT pra sempre e a tela de Rastreamento
+// ("Em rota agora", que filtra dispatch IN_TRANSIT/ASSIGNED) acumulava entregas já entregues.
+// ──────────────────────────────────────────────
+
+export async function completeDispatchForDelivery(deliveryRequestId: string): Promise<void> {
+  await prisma.dispatch.updateMany({
+    where: {
+      deliveryRequestId,
+      status: { in: [DispatchStatus.PENDING, DispatchStatus.ASSIGNED, DispatchStatus.IN_TRANSIT] },
+    },
+    data: { status: DispatchStatus.COMPLETED, completedAt: new Date() },
+  });
 }
 
 export async function dispatchRoute(routeId: string, operatorId: string) {
