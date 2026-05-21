@@ -6,9 +6,10 @@ import { compressImage } from "@/lib/image-compress";
 import type { OperationalCard } from "./types";
 
 interface Props {
-  card:      OperationalCard;
-  onClose:   () => void;
-  onSuccess: () => void;
+  card:          OperationalCard;
+  requirePhoto?: boolean;
+  onClose:       () => void;
+  onSuccess:     () => void;
 }
 
 function formatRef(card: OperationalCard) {
@@ -19,7 +20,7 @@ function formatRef(card: OperationalCard) {
 
 // Modal de finalização manual pelo operador. Exige canhoto + material (igual ao
 // motorista) e envia pro endpoint dedicado, que auto-avança a entrega até DELIVERED.
-export function MarkDeliveredModal({ card, onClose, onSuccess }: Props) {
+export function MarkDeliveredModal({ card, requirePhoto = true, onClose, onSuccess }: Props) {
   const receiptRef  = useRef<HTMLInputElement>(null);
   const materialRef = useRef<HTMLInputElement>(null);
 
@@ -45,7 +46,7 @@ export function MarkDeliveredModal({ card, onClose, onSuccess }: Props) {
     }
   }
 
-  const canSubmit = Boolean(receiptFile && materialFile);
+  const canSubmit = requirePhoto ? Boolean(receiptFile && materialFile) : true;
 
   async function handleSubmit() {
     if (!canSubmit) {
@@ -99,7 +100,9 @@ export function MarkDeliveredModal({ card, onClose, onSuccess }: Props) {
         {/* Slots de foto */}
         <div className="px-5 py-4 space-y-3">
           <p className="text-[11px]" style={{ color: "#6B7280" }}>
-            Anexe o comprovante da entrega (obrigatório).
+            {requirePhoto
+              ? "Anexe o comprovante da entrega (obrigatório)."
+              : "Foto opcional — você pode anexar o comprovante se quiser."}
           </p>
           {slots.map(({ slot, label, icon: Icon, file, ref }) => (
             <div key={slot}>

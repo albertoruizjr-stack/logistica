@@ -16,9 +16,10 @@ interface ExistingProof {
 interface Props {
   deliveryRequestId: string;
   existingProofs:    ExistingProof[];
+  requirePhoto?:     boolean;
 }
 
-export default function DeliveryActions({ deliveryRequestId, existingProofs }: Props) {
+export default function DeliveryActions({ deliveryRequestId, existingProofs, requirePhoto = true }: Props) {
   const router = useRouter();
   const receiptRef  = useRef<HTMLInputElement>(null);
   const materialRef = useRef<HTMLInputElement>(null);
@@ -54,7 +55,7 @@ export default function DeliveryActions({ deliveryRequestId, existingProofs }: P
 
   const hasReceipt  = existingProofs.some((p) => p.type === "RECEIPT")  || Boolean(receiptFile);
   const hasMaterial = existingProofs.some((p) => p.type === "MATERIAL") || Boolean(materialFile);
-  const canDeliver  = hasReceipt && hasMaterial;
+  const canDeliver  = requirePhoto ? (hasReceipt && hasMaterial) : true;
 
   async function handleDeliver() {
     if (!canDeliver) {
@@ -118,7 +119,7 @@ export default function DeliveryActions({ deliveryRequestId, existingProofs }: P
       <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm space-y-3">
         <p className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold flex items-center gap-1">
           <Camera className="w-3 h-3" />
-          Comprovantes obrigatórios
+          {requirePhoto ? "Comprovantes obrigatórios" : "Comprovantes (foto opcional)"}
         </p>
 
         <PhotoSlot

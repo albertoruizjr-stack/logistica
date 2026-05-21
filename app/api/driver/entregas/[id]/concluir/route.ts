@@ -6,6 +6,7 @@ import { transitionDeliveryRequest } from "@/services/state-machine.service";
 import { uploadProofPhoto, isStorageConfigured } from "@/lib/supabase-storage";
 import { checkAndCompleteRouteFromDeliveryRequest, ensureDeliveryInTransit } from "@/services/route-dispatch.service";
 import { isDeliveryAssignedToDriver } from "@/lib/driver-ownership";
+import { isDeliveryPhotoRequired } from "@/services/system-config.service";
 
 const MAX_PHOTO_BYTES = 10 * 1024 * 1024; // 10 MB
 
@@ -51,16 +52,21 @@ export async function POST(
     const receipt  = form.get("receipt")  as File | null;
     const material = form.get("material") as File | null;
 
+    // Toggle de runtime: quando REQUIRE_DELIVERY_PHOTO == "false", a foto vira opcional.
+    const requirePhoto = await isDeliveryPhotoRequired();
+
     // Verifica se há proof existente (motorista pode anexar fotos em partes)
     const existingByType = new Set(dr.proofs.map((p) => p.type));
     const needsReceipt  = !existingByType.has("RECEIPT");
     const needsMaterial = !existingByType.has("MATERIAL");
 
-    if (needsReceipt && !receipt) {
-      return NextResponse.json(apiError("Foto do canhoto é obrigatória", "MISSING_RECEIPT"), { status: 400 });
-    }
-    if (needsMaterial && !material) {
-      return NextResponse.json(apiError("Foto do material é obrigatória", "MISSING_MATERIAL"), { status: 400 });
+    if (requirePhoto) {
+      if (needsReceipt && !receipt) {
+        return NextResponse.json(apiError("Foto do canhoto é obrigatória", "MISSING_RECEIPT"), { status: 400 });
+      }
+      if (needsMaterial && !material) {
+        return NextResponse.json(apiError("Foto do material é obrigatória", "MISSING_MATERIAL"), { status: 400 });
+      }
     }
 
     // Validação básica de tamanho/tipo

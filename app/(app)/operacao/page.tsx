@@ -1,6 +1,7 @@
 import { getSession } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import { getOperationalQueue } from "@/services/operacao.service";
+import { isDeliveryPhotoRequired } from "@/services/system-config.service";
 import { OperacaoClient } from "./OperacaoClient";
 
 export const metadata = { title: "Operação — Fila Logística" };
@@ -17,12 +18,14 @@ export default async function OperacaoPage() {
   }
 
   const queue = await getOperationalQueue(session.role);
+  const requirePhoto = await isDeliveryPhotoRequired();
 
   return (
     <OperacaoClient
       initial={queue}
       currentUserId={session.userId}
       currentUserName={session.name}
+      requirePhoto={requirePhoto}
     />
   );
 }

@@ -6,6 +6,7 @@ import { ArrowLeft, MapPin, Phone, Package, CheckCircle2, AlertTriangle } from "
 import DeliveryActions from "./_components/delivery-actions";
 import NavigateButton from "./_components/navigate-button";
 import { isDeliveryAssignedToDriver } from "@/lib/driver-ownership";
+import { isDeliveryPhotoRequired } from "@/services/system-config.service";
 
 export default async function EntregaDetalhePage({
   params,
@@ -30,6 +31,8 @@ export default async function EntregaDetalhePage({
     },
   });
   if (!dr) notFound();
+
+  const requirePhoto = await isDeliveryPhotoRequired();
 
   // Garante que essa entrega pertence ao motorista logado.
   // Considera tanto a Route (fase ROTEIRIZADO) quanto o Dispatch (fase DISPATCHED).
@@ -153,6 +156,7 @@ export default async function EntregaDetalhePage({
       {!isDelivered && dr.status !== "CANCELLED" && (
         <DeliveryActions
           deliveryRequestId={dr.id}
+          requirePhoto={requirePhoto}
           existingProofs={dr.proofs.map((p) => ({
             id:        p.id,
             type:      p.type,

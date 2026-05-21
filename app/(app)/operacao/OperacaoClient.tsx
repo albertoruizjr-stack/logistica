@@ -23,9 +23,10 @@ interface OperacaoClientProps {
   initial:       OperationalQueuePayload;
   currentUserId: string;
   currentUserName: string;
+  requirePhoto:  boolean;
 }
 
-export function OperacaoClient({ initial, currentUserId, currentUserName }: OperacaoClientProps) {
+export function OperacaoClient({ initial, currentUserId, currentUserName, requirePhoto }: OperacaoClientProps) {
   const { data, loading, error, refetch } = useOperationalQueue(initial);
 
   // Estado do modal de ação
@@ -221,6 +222,7 @@ export function OperacaoClient({ initial, currentUserId, currentUserName }: Oper
         selectedAction.toStatus === "DELIVERED" ? (
           <MarkDeliveredModal
             card={selectedCard}
+            requirePhoto={requirePhoto}
             onClose={closeModal}
             onSuccess={refetch}
           />
