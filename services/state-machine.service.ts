@@ -78,6 +78,8 @@ export interface TransitionMetadata {
   waveId?: string;              // opcional — wave que originou a rota
   // DISPATCHED (rota)
   dispatchedByRoute?: boolean;  // marca que o dispatch veio de uma Route inteira
+  autoAdvance?: boolean;        // marca avanço automático de estados pulados (ex: concluir sem despacho)
+  manualByOperator?: boolean;   // entrega finalizada manualmente pelo operador (retirada na loja, fora do app) — dispensa rota
   // SEPARADO com divergências (auto via transfer)
   hasDivergences?: boolean;
   totalDivergences?: number;
@@ -246,7 +248,9 @@ export async function validateOperationalGates(
     }
 
     case S.ROTEIRIZADO: {
-      if (!metadata?.routeId) {
+      // Entrega manual pelo operador (retirada na loja / fora do app) não passa
+      // por rota — dispensa o routeId. Caso normal continua exigindo.
+      if (!metadata?.routeId && !metadata?.manualByOperator) {
         throw new StateMachineError(
           "routeId é obrigatório para ROTEIRIZADO. Atribua a solicitação a uma rota.",
           "GATE_FAILED"

@@ -4,7 +4,7 @@ import { getSessionFromRequest } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/types";
 import { transitionDeliveryRequest } from "@/services/state-machine.service";
 import { uploadProofPhoto, isStorageConfigured } from "@/lib/supabase-storage";
-import { checkAndCompleteRouteFromDeliveryRequest } from "@/services/route-dispatch.service";
+import { checkAndCompleteRouteFromDeliveryRequest, ensureDeliveryInTransit } from "@/services/route-dispatch.service";
 import { isDeliveryAssignedToDriver } from "@/lib/driver-ownership";
 
 const MAX_PHOTO_BYTES = 10 * 1024 * 1024; // 10 MB
@@ -116,6 +116,11 @@ export async function POST(
         },
       });
     }
+
+    // Garante que a entrega chegou a IN_TRANSIT antes de marcar DELIVERED.
+    // O app mostra a entrega já em ROTEIRIZADO (rota ainda não despachada); sem isto,
+    // o motorista travava com "Transição inválida: ROTEIRIZADO → DELIVERED".
+    await ensureDeliveryInTransit(dr.id, session.userId, "DRIVER");
 
     // Transita pra DELIVERED via state machine
     await transitionDeliveryRequest({

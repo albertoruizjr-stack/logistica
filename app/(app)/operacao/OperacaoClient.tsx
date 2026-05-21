@@ -7,6 +7,7 @@ import { MetricsBar }          from "@/components/operacao/MetricsBar";
 import { CutoffBar }           from "@/components/operacao/CutoffBar";
 import { WorkQueueColumn }     from "@/components/operacao/WorkQueueColumn";
 import { ActionModal }         from "@/components/operacao/ActionModal";
+import { MarkDeliveredModal }  from "@/components/operacao/MarkDeliveredModal";
 import { ClaimConflictModal }  from "@/components/operacao/ClaimConflictModal";
 import { QueueFilterBar }      from "@/components/operacao/QueueFilterBar";
 import type {
@@ -215,14 +216,22 @@ export function OperacaoClient({ initial, currentUserId, currentUserName }: Oper
         </div>
       </div>
 
-      {/* Modal de ação */}
+      {/* Modal de ação — "Marcar entregue" usa o modal de foto; demais usam o ActionModal */}
       {selectedCard && selectedAction && (
-        <ActionModal
-          card={selectedCard}
-          action={selectedAction}
-          onClose={closeModal}
-          onSubmit={handleAction}
-        />
+        selectedAction.toStatus === "DELIVERED" ? (
+          <MarkDeliveredModal
+            card={selectedCard}
+            onClose={closeModal}
+            onSuccess={refetch}
+          />
+        ) : (
+          <ActionModal
+            card={selectedCard}
+            action={selectedAction}
+            onClose={closeModal}
+            onSubmit={handleAction}
+          />
+        )
       )}
 
       {/* Modal de conflito de claim */}
