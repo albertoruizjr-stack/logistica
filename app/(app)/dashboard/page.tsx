@@ -46,6 +46,72 @@ function KpiLink({
   );
 }
 
+// Card de custo logístico do dia — separa frota própria (custo fixo afundado, exibida
+// como CONTAGEM de entregas) de Lalamove (custo marginal real em R$). Estilo alinhado
+// ao MetricCard para manter consistência visual na grade do Financeiro.
+function CustoLogisticoCard({
+  frotaCount,
+  lalamoveCount,
+  lalamoveGasto,
+}: {
+  frotaCount: number;
+  lalamoveCount: number;
+  lalamoveGasto: number;
+}) {
+  return (
+    <Link href="/auditoria" className="block hover:opacity-90 transition-opacity">
+      <div
+        className="bg-white rounded-xl p-5 transition-shadow hover:shadow-md"
+        style={{ border: "1px solid var(--color-border)" }}
+      >
+        <div className="flex items-start justify-between mb-4">
+          <p
+            className="text-[10px] font-semibold uppercase"
+            style={{ letterSpacing: "0.12em", color: "#A3A3A3", fontFamily: "var(--font-body)" }}
+          >
+            Custo Logístico Hoje
+          </p>
+          <div
+            className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
+            style={{ backgroundColor: "#F4F4F4" }}
+          >
+            <DollarSign className="w-4 h-4" style={{ color: "#737373" }} />
+          </div>
+        </div>
+
+        <p
+          className="text-[24px] font-bold leading-none tabular-nums"
+          style={{ fontFamily: "var(--font-display)", color: "var(--color-body-text)" }}
+        >
+          {formatCurrency(lalamoveGasto)}
+          <span className="text-[13px] font-medium ml-1.5" style={{ color: "#A3A3A3" }}>
+            em Lalamove
+          </span>
+        </p>
+
+        <div className="mt-4 pt-3 space-y-1.5" style={{ borderTop: "1px solid var(--color-border)" }}>
+          <div className="flex items-center justify-between">
+            <span className="text-[12px]" style={{ color: "#737373" }}>
+              🚐 Frota própria
+            </span>
+            <span className="text-[12px] font-medium tabular-nums" style={{ color: "var(--color-body-text)" }}>
+              {frotaCount} {frotaCount === 1 ? "entrega" : "entregas"}
+            </span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-[12px]" style={{ color: "#737373" }}>
+              🛵 Lalamove
+            </span>
+            <span className="text-[12px] font-medium tabular-nums" style={{ color: "var(--color-body-text)" }}>
+              {lalamoveCount} · {formatCurrency(lalamoveGasto)}
+            </span>
+          </div>
+        </div>
+      </div>
+    </Link>
+  );
+}
+
 export default async function DashboardPage() {
   const session = await getSession();
   if (!session) redirect("/login");
@@ -77,6 +143,7 @@ export default async function DashboardPage() {
     sameDayToday,
     sameDayAfterCutoff,
     sameDayExceptionsToday,
+    dispatchesHoje,
   ] = await Promise.all([
     prisma.deliveryRequest.count({ where: { status: { in: ["PENDING", "AWAITING_ITEMS", "AWAITING_TRANSFER", "READY"] } } }),
     prisma.deliveryRequest.count({ where: { createdAt: { gte: today } } }),
@@ -141,7 +208,21 @@ export default async function DashboardPage() {
     prisma.deliveryRequest.count({
       where: { createdAt: { gte: today }, sameDayRequested: true },
     }),
+    // custo logístico de hoje agregado por modal — frota própria (contagem) vs Lalamove (R$)
+    prisma.dispatch.groupBy({
+      by: ["modal"],
+      where: { dispatchedAt: { gte: today } },
+      _count: { _all: true },
+      _sum: { actualCost: true, estimatedCost: true },
+    }),
   ]);
+
+  // Custo logístico de hoje — split frota própria (sunk cost, conta entregas) x Lalamove (R$)
+  const lalamoveAgg = dispatchesHoje.find((d) => d.modal === "LALAMOVE");
+  const frotaCount = dispatchesHoje.find((d) => d.modal === "INTERNAL_ROUTE")?._count._all ?? 0;
+  const lalamoveGasto =
+    (lalamoveAgg?._sum.actualCost ?? 0) || (lalamoveAgg?._sum.estimatedCost ?? 0);
+  const lalamoveCount = lalamoveAgg?._count._all ?? 0;
 
   // Alertas que justificam CTA imediato — ordem: despachos → transferências urgentes → justificativas
   const alertItems: { message: string; time: string | null; href: string; cta: string }[] = [];
@@ -264,7 +345,7 @@ export default async function DashboardPage() {
         <SectionLabel>Financeiro</SectionLabel>
         <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
           <KpiLink href="/auditoria"              label="Frete Faturado Hoje"  value={formatCurrency(auditSummary._sum.chargedFreight ?? 0)} icon={TrendingUp}  variant="success" />
-          <KpiLink href="/auditoria"              label="Custo Logístico Hoje" value={formatCurrency(auditSummary._sum.estimatedCost ?? 0)}  icon={DollarSign}  variant="default" />
+          <CustoLogisticoCard frotaCount={frotaCount} lalamoveCount={lalamoveCount} lalamoveGasto={lalamoveGasto} />
           <KpiLink href="/auditoria?pendente=true" label="Justific. Pendentes" value={pendingJustifications} icon={AlertOctagon} variant={pendingJustifications > 0 ? "danger" : "default"} />
         </div>
       </div>
