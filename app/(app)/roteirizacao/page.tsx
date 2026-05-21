@@ -10,6 +10,7 @@ import NovaWaveForm from "./_components/nova-wave-form";
 import SyncDriversButton from "./_components/sync-drivers-button";
 import DeleteWaveButton from "./_components/delete-wave-button";
 import { VEHICLE_CAPACITY } from "@/services/citel-stock.service";
+import { type RouteSequenceEntry, extractTransferIds } from "@/lib/route-sequence";
 
 const ALLOWED_ROLES = ["ADMIN", "OPERATOR", "LOGISTICS_OPERATOR"];
 
@@ -45,7 +46,13 @@ export default async function RoteirizacaoPage() {
   if (!session) redirect("/login");
   if (!ALLOWED_ROLES.includes(session.role)) redirect("/dashboard");
 
-  const [eligibleRequests, availableDrivers, recentWaves] = await Promise.all([
+  // Janela do dia (local) — para filtrar rotas candidatas do dia.
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const endOfToday = new Date();
+  endOfToday.setHours(23, 59, 59, 999);
+
+  const [eligibleRequests, availableDrivers, recentWaves, rawTransfers, activeRoutes] = await Promise.all([
     prisma.deliveryRequest.findMany({
       where: {
         status: "PRONTO_ROTEIRIZACAO",
@@ -78,7 +85,109 @@ export default async function RoteirizacaoPage() {
       orderBy: { name: "asc" },
     }),
     listWaves({ limit: 10 }),
+    // Transferências disponíveis para coleta. APPROVED e PREPARED são ambos
+    // "para coletar" até a migração que aposenta PREPARED.
+    prisma.transfer.findMany({
+      where: {
+        status: { in: ["APPROVED", "PREPARED"] },
+      },
+      select: {
+        id:            true,
+        teNumber:      true,
+        nfCitelNumero: true,
+        fromStore:     { select: { id: true, code: true, name: true, lat: true, lng: true } },
+        toStore:       { select: { code: true, name: true } },
+        _count:        { select: { items: true } },
+      },
+      orderBy: { requestedAt: "asc" },
+      take: 200,
+    }),
+    // Rotas ativas/despachadas do dia — candidatas para "Incluir na rota" e base
+    // para excluir transferências que já estão em alguma rota.
+    prisma.route.findMany({
+      where: {
+        status: { in: ["ACTIVE", "DISPATCHED"] },
+        date:   { gte: startOfToday, lte: endOfToday },
+      },
+      select: {
+        id:           true,
+        name:         true,
+        status:       true,
+        sequenceJson: true,
+        driver:       { select: { name: true, store: { select: { lat: true, lng: true } } } },
+      },
+      orderBy: { createdAt: "asc" },
+    }),
   ]);
+
+  // Conjunto de transferências já presentes em alguma rota ativa (TRANSFER_PICKUP).
+  const transferIdsOnRoutes = new Set<string>();
+  for (const r of activeRoutes) {
+    const seq = (r.sequenceJson as unknown as RouteSequenceEntry[] | null) ?? [];
+    for (const id of extractTransferIds(seq)) transferIdsOnRoutes.add(id);
+  }
+
+  // Coletas elegíveis = transferências para coletar que NÃO estão em rota ativa.
+  const eligibleCollections = rawTransfers
+    .filter((t) => !transferIdsOnRoutes.has(t.id))
+    .map((t) => ({
+      id:            t.id,
+      doc:           t.teNumber ? `TE ${t.teNumber}` : t.nfCitelNumero ? `NF ${t.nfCitelNumero}` : `#${t.id.slice(-6)}`,
+      fromStoreId:   t.fromStore.id,
+      fromStoreCode: t.fromStore.code,
+      fromStoreName: t.fromStore.name,
+      fromLat:       t.fromStore.lat,
+      fromLng:       t.fromStore.lng,
+      toStoreCode:   t.toStore.code,
+      itemCount:     t._count.items,
+    }));
+
+  // Rotas candidatas para o seletor de "Incluir na rota".
+  // Pra recomendar o motorista mais próximo, coletamos coords das paradas de entrega
+  // da rota (deliveryLat/Lng das DRs) e, como fallback, a coord da loja do motorista.
+  const deliveryStopIds = activeRoutes.flatMap((r) => {
+    const seq = (r.sequenceJson as unknown as RouteSequenceEntry[] | null) ?? [];
+    return seq
+      .map((s) => s.deliveryRequestId)
+      .filter((id): id is string => typeof id === "string" && id.length > 0);
+  });
+  const deliveryCoords =
+    deliveryStopIds.length > 0
+      ? await prisma.deliveryRequest.findMany({
+          where:  { id: { in: deliveryStopIds } },
+          select: { id: true, deliveryLat: true, deliveryLng: true },
+        })
+      : [];
+  // Lookup por id (objeto simples — evita colidir com o ícone `Map` do lucide-react).
+  const coordById: Record<string, { deliveryLat: number | null; deliveryLng: number | null }> = {};
+  for (const d of deliveryCoords) coordById[d.id] = d;
+
+  const candidateRoutes = activeRoutes.map((r) => {
+    const seq = (r.sequenceJson as unknown as RouteSequenceEntry[] | null) ?? [];
+    const stopCoords: { lat: number; lng: number }[] = [];
+    for (const s of seq) {
+      if (s.deliveryRequestId) {
+        const c = coordById[s.deliveryRequestId];
+        if (c?.deliveryLat != null && c?.deliveryLng != null) {
+          stopCoords.push({ lat: c.deliveryLat, lng: c.deliveryLng });
+        }
+      } else if (s.lat != null && s.lng != null) {
+        stopCoords.push({ lat: s.lat, lng: s.lng });
+      }
+    }
+    // Fallback: loja do motorista quando não há coords de paradas.
+    if (stopCoords.length === 0 && r.driver.store && r.driver.store.lat != null && r.driver.store.lng != null) {
+      stopCoords.push({ lat: r.driver.store.lat, lng: r.driver.store.lng });
+    }
+    return {
+      id:         r.id,
+      name:       r.name ?? "Rota sem nome",
+      status:     r.status,
+      driverName: r.driver.name,
+      stopCount:  seq.length,
+      stopCoords,
+    };
+  });
 
   const today = new Date();
   const todayLabel = today.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
@@ -89,7 +198,7 @@ export default async function RoteirizacaoPage() {
     <div className="p-6 max-w-7xl mx-auto">
       <PageHeader
         title="Roteirização"
-        description={`Crie ondas de entregas otimizadas pelo Spoke · ${eligibleRequests.length} elegíveis · ${availableDrivers.length} motoristas disponíveis`}
+        description={`Crie ondas de entregas otimizadas pelo Spoke · ${eligibleRequests.length} elegíveis · ${eligibleCollections.length} coletas · ${availableDrivers.length} motoristas disponíveis`}
         actions={<SyncDriversButton />}
       />
 
@@ -115,6 +224,8 @@ export default async function RoteirizacaoPage() {
               hasSpokeId:  Boolean(d.spokeDriverId),
               hasEmail:    Boolean(d.email),
             }))}
+            eligibleCollections={eligibleCollections}
+            candidateRoutes={candidateRoutes}
           />
         </div>
 

@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, Play, AlertTriangle, CheckCircle2, Truck } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { Loader2, Play, AlertTriangle, CheckCircle2, Truck, PackageCheck, X, ArrowRight } from "lucide-react";
+import { cn, calculateHaversineDistance } from "@/lib/utils";
 import { formatVolumeBreakdown } from "@/services/citel-stock.service";
 import { LalamoveCallModal } from "./lalamove-call-modal";
 
@@ -38,10 +38,36 @@ interface WaveProgress {
   distributedAt: string | null;
 }
 
+// Transferência disponível para coleta (renderizada como item na roteirização).
+interface EligibleCollection {
+  id:            string;
+  doc:           string;   // "TE 123" | "NF 456" | "#abc123"
+  fromStoreId:   string;
+  fromStoreCode: string;
+  fromStoreName: string;
+  fromLat:       number | null;
+  fromLng:       number | null;
+  toStoreCode:   string;
+  itemCount:     number;
+}
+
+// Rota candidata para o seletor "Incluir na rota".
+interface CandidateRoute {
+  id:         string;
+  name:       string;
+  status:     string;
+  driverName: string;
+  stopCount:  number;
+  // Coords das paradas (entregas + loja do motorista como fallback) — base da recomendação.
+  stopCoords: { lat: number; lng: number }[];
+}
+
 interface Props {
-  eligibleRequests: EligibleRequest[];
-  availableDrivers: AvailableDriver[];
-  suggestedName:    string;
+  eligibleRequests:   EligibleRequest[];
+  availableDrivers:   AvailableDriver[];
+  suggestedName:      string;
+  eligibleCollections?: EligibleCollection[];
+  candidateRoutes?:     CandidateRoute[];
 }
 
 const TERMINAL_STATUSES = new Set(["DISTRIBUTED", "DISPATCHED", "COMPLETED", "FAILED"]);
@@ -60,6 +86,8 @@ export default function NovaWaveForm({
   eligibleRequests,
   availableDrivers,
   suggestedName,
+  eligibleCollections = [],
+  candidateRoutes = [],
 }: Props) {
   const router = useRouter();
   const [name,       setName]       = useState(suggestedName);
@@ -73,6 +101,10 @@ export default function NovaWaveForm({
   const [bypassCapacity, setBypassCapacity] = useState(false);
   // Entrega-alvo do modal Lalamove (chamada avulsa por entrega).
   const [lalaTarget, setLalaTarget] = useState<EligibleRequest | null>(null);
+  // Seleção de coletas de transferência — independente da seleção de entregas.
+  const [collectionIds, setCollectionIds] = useState<Set<string>>(new Set());
+  // Modal "Incluir na rota".
+  const [includeOpen, setIncludeOpen] = useState(false);
 
   // Capacidade selecionada × peso total das DRs selecionadas
   const totalWeightKg = Array.from(reqIds).reduce((acc, id) => {
@@ -131,6 +163,12 @@ export default function NovaWaveForm({
     setDrvIds(next);
   }
 
+  function toggleCollection(id: string) {
+    const next = new Set(collectionIds);
+    next.has(id) ? next.delete(id) : next.add(id);
+    setCollectionIds(next);
+  }
+
   async function handleSubmit() {
     setSubmitting(true);
     setError(null);
@@ -165,6 +203,58 @@ export default function NovaWaveForm({
     } finally {
       setSubmitting(false);
     }
+  }
+
+  // Coletas selecionadas (objetos).
+  const selectedCollections = useMemo(
+    () => eligibleCollections.filter((c) => collectionIds.has(c.id)),
+    [eligibleCollections, collectionIds],
+  );
+
+  // Recomendação: rota cuja parada mais próxima está mais perto das lojas de origem
+  // das coletas selecionadas. Usa o menor Haversine entre cada origem e cada parada.
+  // Se faltarem coords (origem ou paradas), não recomenda (todas selecionáveis).
+  const recommendedRouteId = useMemo<string | null>(() => {
+    const origins = selectedCollections
+      .filter((c) => c.fromLat != null && c.fromLng != null)
+      .map((c) => ({ lat: c.fromLat as number, lng: c.fromLng as number }));
+    if (origins.length === 0) return null;
+
+    let best: { routeId: string; dist: number } | null = null;
+    for (const route of candidateRoutes) {
+      if (route.stopCoords.length === 0) continue;
+      // Menor distância de qualquer origem a qualquer parada desta rota.
+      let routeMin = Infinity;
+      for (const o of origins) {
+        for (const s of route.stopCoords) {
+          const d = calculateHaversineDistance(o.lat, o.lng, s.lat, s.lng);
+          if (d < routeMin) routeMin = d;
+        }
+      }
+      if (routeMin < Infinity && (best === null || routeMin < best.dist)) {
+        best = { routeId: route.id, dist: routeMin };
+      }
+    }
+    return best?.routeId ?? null;
+  }, [selectedCollections, candidateRoutes]);
+
+  async function handleInclude(routeId: string) {
+    const res = await fetch("/api/roteirizacao/incluir-coleta", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        transferIds: Array.from(collectionIds),
+        routeId,
+      }),
+    });
+    const json = await res.json();
+    if (!res.ok || !json.success) {
+      throw new Error(json.error ?? "Erro ao incluir coleta na rota");
+    }
+    // Sucesso: coletas saem da lista (agora estão numa rota) — recarrega dados do server.
+    setCollectionIds(new Set());
+    setIncludeOpen(false);
+    router.refresh();
   }
 
   const driversBlocked = availableDrivers.filter((d) => !d.hasEmail);
@@ -349,6 +439,91 @@ export default function NovaWaveForm({
         )}
       </div>
 
+      {/* Coletas de transferência — seleção independente das entregas. NÃO entram na wave. */}
+      <div>
+        <label className="flex items-center justify-between mb-2">
+          <span className="text-xs font-semibold text-gray-700 flex items-center gap-1.5">
+            <PackageCheck className="w-3.5 h-3.5 text-orange-500" />
+            Coletas de transferência ({collectionIds.size} de {eligibleCollections.length})
+          </span>
+          {eligibleCollections.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setCollectionIds(
+                collectionIds.size === eligibleCollections.length
+                  ? new Set()
+                  : new Set(eligibleCollections.map((c) => c.id)),
+              )}
+              className="text-[11px] text-orange-600 hover:underline font-medium"
+            >
+              {collectionIds.size === eligibleCollections.length ? "Limpar" : "Selecionar todas"}
+            </button>
+          )}
+        </label>
+        {eligibleCollections.length === 0 ? (
+          <p className="text-sm text-gray-400 italic">Nenhuma transferência disponível para coleta.</p>
+        ) : (
+          <div className="border border-gray-200 rounded-lg max-h-72 overflow-y-auto divide-y divide-gray-100">
+            {eligibleCollections.map((c) => {
+              const isSelected = collectionIds.has(c.id);
+              return (
+                <div
+                  key={c.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => toggleCollection(c.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      if (e.key === " ") e.preventDefault();
+                      toggleCollection(c.id);
+                    }
+                  }}
+                  className={cn(
+                    "w-full flex items-center gap-3 px-3 py-2 text-left transition-colors cursor-pointer",
+                    isSelected ? "bg-orange-50" : "bg-white hover:bg-gray-50",
+                  )}
+                >
+                  <span className={cn(
+                    "w-4 h-4 rounded border flex items-center justify-center flex-shrink-0",
+                    isSelected ? "bg-orange-500 border-orange-500" : "border-gray-300",
+                  )}>
+                    {isSelected && <CheckCircle2 className="w-3 h-3 text-white" />}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-gray-900 truncate flex items-center gap-1.5">
+                      {c.doc}
+                      <span className="text-gray-400 font-normal">·</span>
+                      <span className="inline-flex items-center gap-1 text-gray-600">
+                        {c.fromStoreCode}
+                        <ArrowRight className="w-3 h-3 text-gray-400" />
+                        {c.toStoreCode}
+                      </span>
+                    </p>
+                    <p className="text-xs text-gray-500 truncate">{c.fromStoreName}</p>
+                  </div>
+                  <div className="flex-shrink-0 text-right text-[11px] text-gray-400">
+                    {c.itemCount} {c.itemCount === 1 ? "item" : "itens"}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {eligibleCollections.length > 0 && (
+          <div className="flex items-center justify-end pt-2">
+            <button
+              type="button"
+              onClick={() => setIncludeOpen(true)}
+              disabled={collectionIds.size === 0}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold border border-orange-300 text-orange-700 hover:bg-orange-50 transition disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <PackageCheck className="w-4 h-4" />
+              Incluir na rota ({collectionIds.size})
+            </button>
+          </div>
+        )}
+      </div>
+
       {/* Resumo de capacidade — só aparece quando há motoristas selecionados */}
       {drvIds.size > 0 && (
         <div className={cn(
@@ -435,6 +610,166 @@ export default function NovaWaveForm({
           onClose={() => setLalaTarget(null)}
         />
       )}
+
+      {/* Modal "Incluir na rota" — escolhe a rota destino das coletas selecionadas */}
+      {includeOpen && (
+        <IncluirNaRotaModal
+          collections={selectedCollections}
+          routes={candidateRoutes}
+          recommendedRouteId={recommendedRouteId}
+          onConfirm={handleInclude}
+          onClose={() => setIncludeOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────
+// MODAL: Incluir coleta(s) na rota
+// ──────────────────────────────────────────────
+function IncluirNaRotaModal({
+  collections,
+  routes,
+  recommendedRouteId,
+  onConfirm,
+  onClose,
+}: {
+  collections: EligibleCollection[];
+  routes: CandidateRoute[];
+  recommendedRouteId: string | null;
+  onConfirm: (routeId: string) => Promise<void>;
+  onClose: () => void;
+}) {
+  // Pré-seleciona a rota recomendada (ou a primeira).
+  const [routeId, setRouteId] = useState<string | null>(
+    recommendedRouteId ?? routes[0]?.id ?? null,
+  );
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function confirm() {
+    if (!routeId) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onConfirm(routeId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Erro ao incluir coleta");
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="bg-white rounded-xl border border-gray-200 w-full max-w-lg max-h-[85vh] flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <h3 className="text-base font-bold text-gray-900 flex items-center gap-2">
+            <PackageCheck className="w-4 h-4 text-orange-500" />
+            Incluir na rota
+          </h3>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-600 rounded-lg p-1 hover:bg-gray-100"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="px-5 py-4 overflow-y-auto space-y-4">
+          {/* Coletas selecionadas */}
+          <div>
+            <p className="text-xs font-semibold text-gray-700 mb-1.5">
+              {collections.length} coleta{collections.length === 1 ? "" : "s"} selecionada{collections.length === 1 ? "" : "s"}
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {collections.map((c) => (
+                <span
+                  key={c.id}
+                  className="inline-flex items-center gap-1 text-[11px] bg-gray-100 text-gray-700 rounded-md px-2 py-0.5"
+                >
+                  {c.doc} · {c.fromStoreCode}→{c.toStoreCode}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          {/* Seletor de rota */}
+          <div>
+            <p className="text-xs font-semibold text-gray-700 mb-1.5">Escolha a rota</p>
+            {routes.length === 0 ? (
+              <p className="text-sm text-gray-400 italic">Nenhuma rota ativa disponível hoje.</p>
+            ) : (
+              <div className="space-y-2">
+                {routes.map((r) => {
+                  const isSelected = routeId === r.id;
+                  const isRecommended = recommendedRouteId === r.id;
+                  return (
+                    <button
+                      key={r.id}
+                      type="button"
+                      onClick={() => setRouteId(r.id)}
+                      className={cn(
+                        "w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border text-left transition-colors",
+                        isSelected
+                          ? "bg-orange-50 border-orange-300"
+                          : "bg-white border-gray-200 hover:border-gray-300",
+                      )}
+                    >
+                      <span className={cn(
+                        "w-4 h-4 rounded-full border flex items-center justify-center flex-shrink-0",
+                        isSelected ? "bg-orange-500 border-orange-500" : "border-gray-300",
+                      )}>
+                        {isSelected && <CheckCircle2 className="w-3 h-3 text-white" />}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium text-gray-900 truncate flex items-center gap-2">
+                          {r.name}
+                          {isRecommended && (
+                            <span className="text-[10px] font-bold text-green-700 bg-green-100 rounded-full px-2 py-0.5 flex-shrink-0">
+                              ✓ recomendado
+                            </span>
+                          )}
+                        </p>
+                        <p className="text-[11px] text-gray-500 truncate">
+                          {r.driverName} · {r.stopCount} paradas · {r.status === "DISPATCHED" ? "Despachada" : "Ativa"}
+                        </p>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {error && (
+            <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-sm text-red-700 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-gray-100">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-lg"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            onClick={confirm}
+            disabled={!routeId || submitting}
+            className="flex items-center gap-2 bg-orange-500 text-white px-5 py-2.5 rounded-lg text-sm font-semibold hover:bg-orange-600 transition disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <PackageCheck className="w-4 h-4" />}
+            Incluir na rota
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
