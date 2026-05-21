@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, Play, AlertTriangle, CheckCircle2 } from "lucide-react";
+import { Loader2, Play, AlertTriangle, CheckCircle2, Truck } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatVolumeBreakdown } from "@/services/citel-stock.service";
+import { LalamoveCallModal } from "./lalamove-call-modal";
 
 interface EligibleRequest {
   id:               string;
@@ -70,6 +71,8 @@ export default function NovaWaveForm({
   const [progress,   setProgress]   = useState<WaveProgress | null>(null);
   // Quando peso total excede capacidade, operador precisa marcar pra liberar.
   const [bypassCapacity, setBypassCapacity] = useState(false);
+  // Entrega-alvo do modal Lalamove (chamada avulsa por entrega).
+  const [lalaTarget, setLalaTarget] = useState<EligibleRequest | null>(null);
 
   // Capacidade selecionada × peso total das DRs selecionadas
   const totalWeightKg = Array.from(reqIds).reduce((acc, id) => {
@@ -321,6 +324,25 @@ export default function NovaWaveForm({
                     ) : null}
                     {r.totalWeightKg != null && <p>{r.totalWeightKg.toFixed(0)} kg</p>}
                   </div>
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setLalaTarget(r);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        setLalaTarget(r);
+                      }
+                    }}
+                    className="flex-shrink-0 flex items-center gap-1 px-2 py-1 rounded-md border border-gray-200 text-[11px] font-medium text-gray-500 hover:border-orange-300 hover:text-orange-600 hover:bg-orange-50 transition-colors"
+                  >
+                    <Truck className="w-3 h-3" />
+                    Lalamove
+                  </span>
                 </button>
               );
             })}
@@ -396,6 +418,24 @@ export default function NovaWaveForm({
           Criar wave e otimizar
         </button>
       </div>
+
+      {/* Modal Lalamove — chamada avulsa por entrega */}
+      {lalaTarget && (
+        <LalamoveCallModal
+          delivery={{
+            id: lalaTarget.id,
+            label: `${
+              lalaTarget.invoiceNumber
+                ? `NF ${lalaTarget.invoiceNumber}`
+                : lalaTarget.orderNumber
+                  ? `PD ${lalaTarget.orderNumber}`
+                  : `#${lalaTarget.id.slice(-6)}`
+            } · ${lalaTarget.customerName}`,
+            address: `${lalaTarget.deliveryAddress}${lalaTarget.deliveryCity ? ` — ${lalaTarget.deliveryCity}` : ""}`,
+          }}
+          onClose={() => setLalaTarget(null)}
+        />
+      )}
     </div>
   );
 }
