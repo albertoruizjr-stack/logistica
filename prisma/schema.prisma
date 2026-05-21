@@ -685,6 +685,13 @@ model Transfer {
   // citelTakesOver() só roda quando este campo é definido pela primeira vez.
   nfCitelNumero     String?
   nfCitelEmitidaAt  DateTime?
+  // Documento da transferência informado na autorização: TE (comprovante, não fiscal)
+  // OU NF (fiscal — reusa nfCitelNumero acima). teNumber guarda o caso TE.
+  teNumber          String?
+  // Comprovante de coleta — motorista bate foto ao coletar (PREPARED/APPROVED → IN_TRANSIT)
+  collectPhotoUrl   String?
+  collectPhotoPath  String?
+  collectedAt       DateTime?
   // controle de divergência no recebimento
   hasDivergence     Boolean  @default(false)
   divergenceCount   Int      @default(0)

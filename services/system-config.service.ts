@@ -53,3 +53,27 @@ export async function isRouteStartPhotoRequired(): Promise<boolean> {
     return false;
   }
 }
+
+// Chave que controla, em runtime, se coletar uma transferência na rota EXIGE a
+// foto de coleta. Pode ser alterada no banco sem deploy.
+export const REQUIRE_TRANSFER_COLLECT_PHOTO_KEY = "REQUIRE_TRANSFER_COLLECT_PHOTO";
+
+/**
+ * Indica se a foto de coleta é OBRIGATÓRIA para coletar uma transferência na rota.
+ *
+ * Regra (fail-safe / default = obrigatório — mesma forma de isDeliveryPhotoRequired):
+ *   - retorna `false` SOMENTE quando o valor for exatamente a string "false";
+ *   - qualquer outro valor, chave ausente ou erro de leitura → `true`.
+ */
+export async function isTransferCollectPhotoRequired(): Promise<boolean> {
+  try {
+    const row = await prisma.systemConfig.findUnique({
+      where: { key: REQUIRE_TRANSFER_COLLECT_PHOTO_KEY },
+      select: { value: true },
+    });
+    return row?.value !== "false";
+  } catch {
+    // Em caso de falha de leitura, mantém o comportamento mais seguro: exigir foto.
+    return true;
+  }
+}
