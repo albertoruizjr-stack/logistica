@@ -47,13 +47,25 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { requestId, toStatus, ...meta } = parsed.data;
+    const { requestId, toStatus, ...rest } = parsed.data;
+    const meta: typeof rest & { reactivation?: boolean } = { ...rest };
 
     // Para SEPARADO, o gate operacional exige `separatedBy` (userId de quem confere).
     // Quando o frontend não envia (caso do botão "Próxima ação" no drawer), assume
     // que quem clicou é quem está confirmando — usa session.userId.
     if (toStatus === "SEPARADO" && !meta.separatedBy) {
       meta.separatedBy = session.userId;
+    }
+
+    // Reativação: se a entrega está ATUALMENTE cancelada, esta ação é a
+    // "Reativar" — sinaliza reactivation=true para a state machine abrir a
+    // exceção ao estado terminal CANCELLED e pular os gates operacionais.
+    const current = await prisma.deliveryRequest.findUnique({
+      where:  { id: requestId },
+      select: { status: true },
+    });
+    if (current?.status === DeliveryRequestStatus.CANCELLED) {
+      meta.reactivation = true;
     }
 
     const updated = await transitionDeliveryRequest({

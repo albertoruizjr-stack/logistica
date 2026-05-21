@@ -6,7 +6,7 @@
 // ──────────────────────────────────────────────
 
 import { prisma } from "@/lib/prisma";
-import { DeliveryRequestStatus } from "@prisma/client";
+import { DeliveryRequestStatus, Prisma } from "@prisma/client";
 import { STUCK_THRESHOLD_MIN } from "./analytics.service";
 import type {
   OperationalCard,
@@ -91,7 +91,16 @@ DeliveryRequestStatus.NF_VINCULADA,
     label:    "Ocorrências",
     statuses: [DeliveryRequestStatus.OCORRENCIA],
   },
+  {
+    id:       "cancelados",
+    label:    "Cancelados",
+    statuses: [DeliveryRequestStatus.CANCELLED],
+  },
 ];
+
+// Janela de recência da coluna "Cancelados": só mostra cancelamentos recentes
+// para não carregar todo o histórico de cancelados na fila operacional.
+const CANCELLED_RECENCY_DAYS = 7;
 
 // ── Score de prioridade ──────────────────────────────────────────────────────
 
@@ -132,8 +141,31 @@ export async function getOperationalQueue(role?: string): Promise<OperationalQue
     : COLUMNS;
   const activeStatuses: DeliveryRequestStatus[] = visibleColumns.flatMap((c) => c.statuses);
 
+  // CANCELLED é terminal e pode acumular muito histórico — limitamos a coluna
+  // "Cancelados" aos cancelamentos recentes (últimos CANCELLED_RECENCY_DAYS dias).
+  // Os demais status entram sem filtro de data.
+  const includesCancelled = activeStatuses.includes(DeliveryRequestStatus.CANCELLED);
+  const nonCancelledStatuses = activeStatuses.filter(
+    (s) => s !== DeliveryRequestStatus.CANCELLED
+  );
+  const cancelledCutoff = new Date(
+    Date.now() - CANCELLED_RECENCY_DAYS * 24 * 60 * 60 * 1000
+  );
+
+  const statusWhere: Prisma.DeliveryRequestWhereInput = includesCancelled
+    ? {
+        OR: [
+          { status: { in: nonCancelledStatuses } },
+          {
+            status:    DeliveryRequestStatus.CANCELLED,
+            updatedAt: { gte: cancelledCutoff },
+          },
+        ],
+      }
+    : { status: { in: activeStatuses } };
+
   const requests = await prisma.deliveryRequest.findMany({
-    where: { status: { in: activeStatuses } },
+    where: statusWhere,
     include: {
       store:  { select: { code: true, name: true } },
       seller: { select: { name: true } },

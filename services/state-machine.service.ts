@@ -26,6 +26,24 @@ export const TERMINAL_STATES = new Set<DeliveryRequestStatus>([
 ]);
 
 // ──────────────────────────────────────────────
+// REATIVAÇÃO DE CANCELADOS
+//
+// CANCELLED continua TERMINAL para todos os fluxos normais. A única exceção é
+// a reativação operacional explícita (metadata.reactivation === true), usada
+// quando o operador cancelou uma entrega por engano. Nesse caso, a entrega só
+// pode voltar para uma das fases de recuperação abaixo.
+// ──────────────────────────────────────────────
+
+export const RECOVERY_STATES = new Set<DeliveryRequestStatus>([
+  S.PENDING,
+  S.AWAITING_ITEMS,
+  S.AWAITING_TRANSFER,
+  S.SEPARADO,
+  S.NF_VINCULADA,
+  S.PRONTO_ROTEIRIZACAO,
+]);
+
+// ──────────────────────────────────────────────
 // MAPA DE TRANSIÇÕES PERMITIDAS
 //
 // Regra geral: avança para frente no fluxo ou para OCORRENCIA/CANCELLED.
@@ -94,6 +112,10 @@ export interface TransitionMetadata {
   // CANCELLED forçado (IN_TRANSIT)
   forceCancel?: boolean;
   cancellationReason?: string;  // obrigatório com forceCancel
+  // REATIVAÇÃO de entrega cancelada por engano — abre a exceção ao estado terminal
+  // CANCELLED, permitindo voltar somente para um RECOVERY_STATES. Também pula os
+  // gates operacionais (é uma recuperação manual do operador).
+  reactivation?: boolean;
 }
 
 export interface TransitionContext {
@@ -137,6 +159,20 @@ export function validateTransition(
   actorRole: string,
   metadata?: TransitionMetadata
 ): void {
+  // Reativação de CANCELLED por engano — exceção controlada ao estado terminal.
+  // Só permitida com metadata.reactivation === true e somente para RECOVERY_STATES.
+  // Avaliada ANTES do bloqueio de terminais para abrir a janela de recuperação.
+  if (fromStatus === S.CANCELLED && metadata?.reactivation === true) {
+    if (RECOVERY_STATES.has(toStatus)) {
+      return; // reativação válida
+    }
+    throw new StateMachineError(
+      `Reativação inválida: CANCELLED → ${toStatus}. ` +
+      `Uma entrega cancelada só pode ser reativada para: ${[...RECOVERY_STATES].join(", ")}.`,
+      "INVALID_TRANSITION"
+    );
+  }
+
   // Terminais nunca transitam
   if (TERMINAL_STATES.has(fromStatus)) {
     throw new StateMachineError(
@@ -207,6 +243,13 @@ export async function validateOperationalGates(
   toStatus: DeliveryRequestStatus,
   metadata?: TransitionMetadata
 ): Promise<void> {
+  // Reativação de cancelado é uma recuperação manual do operador: pula os gates
+  // operacionais (availableAtStore, separatedBy, NF, endereço, etc.) para não
+  // bloquear o retorno de uma entrega cancelada por engano à fase escolhida.
+  if (metadata?.reactivation === true) {
+    return;
+  }
+
   switch (toStatus) {
     case S.SEPARADO: {
       if (!metadata?.separatedBy) {

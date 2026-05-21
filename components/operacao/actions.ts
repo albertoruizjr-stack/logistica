@@ -52,6 +52,31 @@ const CANCEL_ACTION: ActionDefinition = {
   ],
 };
 
+// Reativação de entrega cancelada por engano. O campo SELECT tem key "toStatus",
+// então o valor escolhido pelo operador SOBRESCREVE o toStatus padrão da ação no
+// payload ({ requestId, toStatus, ...values }). O endpoint detecta que o status
+// atual é CANCELLED e injeta reactivation=true na metadata da state machine.
+const REATIVAR_ACTION: ActionDefinition = {
+  toStatus:        DeliveryRequestStatus.SEPARADO, // padrão (sobrescrito pelo select)
+  label:           "Reativar",
+  variant:         "primary",
+  requiresConfirm: true,
+  fields: [
+    {
+      key:      "toStatus",
+      label:    "Reativar para a fase",
+      type:     "select",
+      required: true,
+      options: [
+        { value: DeliveryRequestStatus.PENDING,             label: "Pendente" },
+        { value: DeliveryRequestStatus.SEPARADO,            label: "Separação" },
+        { value: DeliveryRequestStatus.AWAITING_TRANSFER,   label: "Aguard. transferência" },
+        { value: DeliveryRequestStatus.PRONTO_ROTEIRIZACAO, label: "Pronto p/ roteirização" },
+      ],
+    },
+  ],
+};
+
 // Entrega manual pelo operador (retirada na loja, fora do app). toStatus DELIVERED
 // é um sinal especial: o OperacaoClient abre um modal de upload de foto (canhoto +
 // material) em vez do ActionModal padrão, e envia pro endpoint /operacao/.../concluir.
@@ -170,5 +195,11 @@ export const ACTIONS_BY_STATUS: Record<string, ActionDefinition[]> = {
     { toStatus: DeliveryRequestStatus.AGUARDANDO_NF,       label: "Aguardar NF",               variant: "ghost" },
     { toStatus: DeliveryRequestStatus.PRONTO_ROTEIRIZACAO, label: "Retomar roteirização",      variant: "ghost" },
     CANCEL_ACTION,
+  ],
+
+  // Entrega cancelada por engano: a ação "Reativar" devolve a entrega para uma
+  // fase de recuperação escolhida pelo operador (select sobrescreve o toStatus).
+  [DeliveryRequestStatus.CANCELLED]: [
+    REATIVAR_ACTION,
   ],
 };
