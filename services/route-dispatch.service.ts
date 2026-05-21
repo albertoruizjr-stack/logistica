@@ -9,7 +9,7 @@ import { prisma } from "@/lib/prisma";
 import { DispatchModal, DispatchStatus, type Prisma } from "@prisma/client";
 import { transitionDeliveryRequest } from "./state-machine.service";
 import { extractDeliveryRequestIds, isManualStop, type RouteSequenceEntry } from "@/lib/route-sequence";
-import { pathToInTransit } from "@/lib/delivery-progression";
+import { pathToInTransit, pathToDelivered } from "@/lib/delivery-progression";
 
 // ──────────────────────────────────────────────
 // AUTO-AVANÇO ATÉ IN_TRANSIT
@@ -76,6 +76,68 @@ export async function ensureDeliveryInTransit(
       actorRole,
       toStatus,
       metadata: { autoAdvance: true, reason: "Auto-avanço ao concluir entrega (rota não despachada)" },
+    });
+  }
+  return { from: dr.status, advanced: path };
+}
+
+// ──────────────────────────────────────────────
+// ENTREGA MANUAL PELO OPERADOR
+// O operador finaliza pela fila operacional (cliente retirou na loja, entrega
+// feita fora do app). Auto-avança a entrega de qualquer estado ativo até
+// DELIVERED, criando um Dispatch EXCEPTION (sem rota) quando preciso. As fotos
+// (canhoto + material) são exigidas e gravadas pelo endpoint antes de chamar isto.
+// ──────────────────────────────────────────────
+
+export async function markDeliveredByOperator(
+  deliveryRequestId: string,
+  actorId: string,
+  actorRole: string,
+): Promise<{ from: string; advanced: string[] }> {
+  const dr = await prisma.deliveryRequest.findUnique({
+    where:  { id: deliveryRequestId },
+    select: { id: true, status: true, storeId: true },
+  });
+  if (!dr) throw new Error("Entrega não encontrada");
+
+  const path = pathToDelivered(dr.status);
+  if (path === null) {
+    throw new Error(
+      `Não é possível marcar entregue a partir de "${dr.status}". ` +
+      `Disponível só para Pronto roteirizar, Roteirizado, Despachado ou Em trânsito.`,
+    );
+  }
+  if (path.length === 0) return { from: dr.status, advanced: [] }; // já entregue
+
+  // O gate de DISPATCHED exige um Dispatch. Se não houver (entrega manual sem
+  // rota), cria um EXCEPTION — não conta como frota nem Lalamove no custo.
+  if (path.includes("DISPATCHED")) {
+    const existing = await prisma.dispatch.findUnique({
+      where:  { deliveryRequestId },
+      select: { id: true },
+    });
+    if (!existing) {
+      await prisma.dispatch.create({
+        data: {
+          deliveryRequestId,
+          storeId:        dr.storeId,
+          modal:          DispatchModal.EXCEPTION,
+          status:         DispatchStatus.IN_TRANSIT,
+          dispatchedById: actorId,
+          dispatchedAt:   new Date(),
+          notes:          "Entrega manual finalizada pelo operador",
+        },
+      });
+    }
+  }
+
+  for (const toStatus of path) {
+    await transitionDeliveryRequest({
+      requestId: deliveryRequestId,
+      actorId,
+      actorRole,
+      toStatus,
+      metadata: { manualByOperator: true, autoAdvance: true, reason: "Entrega finalizada manualmente pelo operador" },
     });
   }
   return { from: dr.status, advanced: path };

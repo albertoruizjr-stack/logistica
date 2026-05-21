@@ -52,6 +52,15 @@ const CANCEL_ACTION: ActionDefinition = {
   ],
 };
 
+// Entrega manual pelo operador (retirada na loja, fora do app). toStatus DELIVERED
+// é um sinal especial: o OperacaoClient abre um modal de upload de foto (canhoto +
+// material) em vez do ActionModal padrão, e envia pro endpoint /operacao/.../concluir.
+const MARCAR_ENTREGUE_ACTION: ActionDefinition = {
+  toStatus: DeliveryRequestStatus.DELIVERED,
+  label:    "Marcar entregue",
+  variant:  "primary",
+};
+
 // Ações disponíveis por status (exibidas no card e detalhadas no modal)
 export const ACTIONS_BY_STATUS: Record<string, ActionDefinition[]> = {
   [DeliveryRequestStatus.PENDING]: [
@@ -130,21 +139,25 @@ export const ACTIONS_BY_STATUS: Record<string, ActionDefinition[]> = {
         placeholder: "Ex: ROTA-2025-001",
       }],
     },
+    MARCAR_ENTREGUE_ACTION,
     OCORRENCIA_ACTION,
     CANCEL_ACTION,
   ],
 
   [DeliveryRequestStatus.ROTEIRIZADO]: [
     { toStatus: DeliveryRequestStatus.PRONTO_ROTEIRIZACAO, label: "Retirar da rota",   variant: "ghost" },
+    MARCAR_ENTREGUE_ACTION,
     OCORRENCIA_ACTION,
     CANCEL_ACTION,
   ],
 
   [DeliveryRequestStatus.DISPATCHED]: [
+    MARCAR_ENTREGUE_ACTION,
     OCORRENCIA_ACTION,
   ],
 
   [DeliveryRequestStatus.IN_TRANSIT]: [
+    MARCAR_ENTREGUE_ACTION,
     OCORRENCIA_ACTION,
   ],
 

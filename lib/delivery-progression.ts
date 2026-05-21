@@ -25,3 +25,22 @@ export function pathToInTransit(
     default:            return null;
   }
 }
+
+// Sequência de transições para levar a entrega até DELIVERED, a partir do estado
+// atual. Usado quando o OPERADOR finaliza manualmente pela fila operacional
+// (cliente retirou na loja, entrega feita fora do app), pulando o roteiro/despacho.
+//   []   → já está em DELIVERED
+//   null → estado de onde NÃO se deve marcar entregue (antes da NF/roteiro,
+//          terminal, ou OCORRENCIA que exige resolução do operador)
+export function pathToDelivered(
+  current: DeliveryRequestStatus,
+): DeliveryRequestStatus[] | null {
+  switch (current) {
+    case "PRONTO_ROTEIRIZACAO": return ["ROTEIRIZADO", "DISPATCHED", "IN_TRANSIT", "DELIVERED"];
+    case "ROTEIRIZADO":         return ["DISPATCHED", "IN_TRANSIT", "DELIVERED"];
+    case "DISPATCHED":          return ["IN_TRANSIT", "DELIVERED"];
+    case "IN_TRANSIT":          return ["DELIVERED"];
+    case "DELIVERED":           return [];
+    default:                    return null;
+  }
+}
