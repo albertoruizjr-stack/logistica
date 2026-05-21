@@ -176,7 +176,7 @@ export default async function RastreamentoPage() {
   // Corridas Lalamove ativas — alimentadas pelo webhook (status/motorista/preço)
   const lalamoveOrders = await prisma.lalamoveOrder.findMany({
     where: { internalStatus: { in: [DispatchStatus.PENDING, DispatchStatus.ASSIGNED, DispatchStatus.IN_TRANSIT] } },
-    include: { dispatch: { include: { deliveryRequest: { select: { customerName: true, customerPhone: true, deliveryAddress: true } } } } },
+    include: { dispatch: { include: { deliveryRequest: { select: { customerName: true, customerPhone: true, deliveryAddress: true, invoiceNumber: true } } } } },
     orderBy: { createdAt: "desc" },
   });
   const rides: LalamoveRide[] = lalamoveOrders.map((o) => ({
@@ -188,6 +188,7 @@ export default async function RastreamentoPage() {
     customerName: o.dispatch?.deliveryRequest?.customerName ?? "Cliente",
     customerPhone: o.dispatch?.deliveryRequest?.customerPhone ?? null,
     address: o.dispatch?.deliveryRequest?.deliveryAddress ?? "",
+    invoiceNumber: o.dispatch?.deliveryRequest?.invoiceNumber ?? null,
   }));
 
   const totalActive = driverData.filter(

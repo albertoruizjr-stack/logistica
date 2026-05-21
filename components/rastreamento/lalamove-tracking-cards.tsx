@@ -1,12 +1,13 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { LALAMOVE_VEHICLE_LABELS } from "@/lib/constants";
 import { toWhatsappNumber } from "@/lib/phone";
 import {
   Bike, Truck, MapPin, User, Phone, ExternalLink,
-  MessageCircle, Copy, Check, DollarSign,
+  MessageCircle, Copy, Check, DollarSign, XCircle, FileText,
 } from "lucide-react";
 
 // ──────────────────────────────────────────────
@@ -18,6 +19,7 @@ export interface LalamoveRide {
   driverName: string | null; driverPhone: string | null; driverPlate: string | null;
   price: number | null; shareLink: string | null;
   customerName: string; customerPhone: string | null; address: string;
+  invoiceNumber: string | null;
 }
 
 // ──────────────────────────────────────────────
@@ -85,7 +87,10 @@ export function LalamoveTrackingCards({ rides }: { rides: LalamoveRide[] }) {
 // ──────────────────────────────────────────────
 
 function LalamoveCard({ ride }: { ride: LalamoveRide }) {
+  const router = useRouter();
   const [copied, setCopied] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
 
   const waNumber = toWhatsappNumber(ride.customerPhone);
   const canWhatsapp = Boolean(waNumber && ride.shareLink);
@@ -101,6 +106,31 @@ function LalamoveCard({ ride }: { ride: LalamoveRide }) {
       setTimeout(() => setCopied(false), 1500);
     } catch {
       // navegador sem permissão de clipboard — silencioso
+    }
+  }
+
+  async function handleCancel() {
+    if (cancelling) return;
+    if (!window.confirm("Cancelar esta corrida e devolver a entrega para elegível?")) return;
+    setCancelling(true);
+    setCancelError(null);
+    try {
+      const res = await fetch("/api/lalamove/cancelar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lalamoveOrderId: ride.orderId }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.success) {
+        throw new Error(data?.error ?? "Não foi possível cancelar a corrida.");
+      }
+      if (data.data?.lalamoveCancelled === false) {
+        alert("Cancelado no sistema. Confirme no app do Lalamove se a corrida foi realmente cancelada.");
+      }
+      router.refresh(); // remove o card (a corrida sai da lista de ativas)
+    } catch (e) {
+      setCancelError(e instanceof Error ? e.message : "Erro ao cancelar.");
+      setCancelling(false);
     }
   }
 
@@ -149,6 +179,12 @@ function LalamoveCard({ ride }: { ride: LalamoveRide }) {
         <p className="flex items-center gap-1.5 text-xs text-gray-700 font-medium">
           <User className="w-3.5 h-3.5 text-gray-400" />
           <span className="truncate">{ride.customerName}</span>
+          {ride.invoiceNumber && (
+            <span className="flex items-center gap-1 text-[11px] font-medium text-gray-500 bg-gray-100 border border-gray-200 rounded px-1.5 py-0.5 ml-auto flex-shrink-0">
+              <FileText className="w-3 h-3" />
+              NF {ride.invoiceNumber}
+            </span>
+          )}
         </p>
         {ride.address && (
           <p className="flex items-start gap-1.5 text-xs text-gray-400">
@@ -214,6 +250,27 @@ function LalamoveCard({ ride }: { ride: LalamoveRide }) {
           {copied ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
           {copied ? "Copiado!" : "Copiar link"}
         </button>
+      </div>
+
+      {/* Cancelar corrida */}
+      <div className="px-4 pb-3">
+        <button
+          type="button"
+          onClick={handleCancel}
+          disabled={cancelling}
+          className={cn(
+            "flex items-center gap-1 text-xs font-medium transition-colors",
+            cancelling
+              ? "text-gray-300 cursor-not-allowed"
+              : "text-red-600 hover:text-red-800"
+          )}
+        >
+          <XCircle className="w-3.5 h-3.5" />
+          {cancelling ? "Cancelando…" : "Cancelar corrida"}
+        </button>
+        {cancelError && (
+          <p className="mt-1 text-[11px] text-red-600">{cancelError}</p>
+        )}
       </div>
     </div>
   );
