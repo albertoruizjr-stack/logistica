@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { buildLalamoveStops, dispatchViaLalamove } from "@/lib/lalamove-dispatch";
 
 // mock do serviço Lalamove (evita HTTP real nos testes)
@@ -134,18 +134,24 @@ describe("dispatchViaLalamove", () => {
   });
 
   it("usa o serviceType informado na cotação", async () => {
-    (getLalamoveQuote as Mock).mockResolvedValue({
+    vi.mocked(getLalamoveQuote).mockResolvedValue({
       quotationId: "Q1", priceBreakdown: { total: "34.50", currency: "BRL" }, stops: [],
-    });
-    (createLalamoveOrder as Mock).mockResolvedValue({ orderId: "O1", shareLink: "http://x" });
+    } as any);
+    vi.mocked(createLalamoveOrder).mockResolvedValue({ orderId: "O1", shareLink: "http://x" } as any);
     await dispatchViaLalamove(mockStore, mockDeliveryRequest, { serviceType: "UV_FIORINO" });
-    expect((getLalamoveQuote as Mock).mock.calls[0][3]).toBe("UV_FIORINO");
+    expect(vi.mocked(getLalamoveQuote).mock.calls[0][3]).toBe("UV_FIORINO");
   });
 
   it("pula a cotação quando recebe quotationId pronto", async () => {
-    (createLalamoveOrder as Mock).mockResolvedValue({ orderId: "O1", shareLink: "http://x" });
+    vi.mocked(createLalamoveOrder).mockResolvedValue({ orderId: "O1", shareLink: "http://x" } as any);
     const r = await dispatchViaLalamove(mockStore, mockDeliveryRequest, { quotationId: "Q-PRONTO", estimatedPrice: 34.5 });
     expect(getLalamoveQuote).not.toHaveBeenCalled();
     expect(r?.lalamoveOrderId).toBe("O1");
+  });
+
+  it("lança erro quando quotationId é fornecido sem estimatedPrice", async () => {
+    await expect(
+      dispatchViaLalamove(mockStore, mockDeliveryRequest, { quotationId: "Q1" })
+    ).rejects.toThrow();
   });
 });

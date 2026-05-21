@@ -83,6 +83,10 @@ export async function dispatchViaLalamove(
   const stops = buildLalamoveStops(store, deliveryRequest);
   if (!stops) return null;
 
+  if (opts.quotationId && opts.estimatedPrice === undefined) {
+    throw new Error("estimatedPrice é obrigatório quando quotationId é fornecido (cotação já feita).");
+  }
+
   let quotationId = opts.quotationId;
   let estimatedPrice = opts.estimatedPrice ?? 0;
 
