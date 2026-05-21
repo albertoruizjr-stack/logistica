@@ -86,7 +86,10 @@ export async function getLalamoveQuote(
     language: "pt_BR",
     serviceType: serviceType,
     specialRequests: [],
-    stops: [originStop, destinationStop],
+    // A cotação v3 só aceita coordinates+address nas paradas. name/phone (do destinatário)
+    // são rejeitados aqui com ERR_UNKNOWN_FIELD — eles entram só na criação do pedido
+    // (recipients). Por isso enviamos uma versão "enxuta" das paradas na cotação.
+    stops: [originStop, destinationStop].map((s) => ({ coordinates: s.coordinates, address: s.address })),
     item: {
       quantity: "1",
       weight: "LESS_THAN_3_KG",
