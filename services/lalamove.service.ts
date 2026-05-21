@@ -7,6 +7,7 @@
 import crypto from "crypto";
 import { LALAMOVE_API_BASE_URL, LALAMOVE_SANDBOX_URL, LALAMOVE_SERVICE_TYPE } from "@/lib/constants";
 import type { LalamoveQuoteRequest, LalamoveQuoteResponse, LalamoveOrderStatus, LalamoveStop } from "@/types";
+import { toE164 } from "@/lib/phone";
 
 // ──────────────────────────────────────────────
 // TIPO DE RETORNO QUANDO NÃO CONFIGURADO
@@ -116,6 +117,24 @@ export async function getLalamoveQuote(
 }
 
 // ──────────────────────────────────────────────
+// STOPIDS DA COTAÇÃO
+// O pedido (POST /v3/orders) precisa referenciar os stopIds GERADOS pela cotação
+// (não "1"/"2"). GET /v3/quotations/{id} devolve data.stops = [{stopId}, {stopId}].
+// ──────────────────────────────────────────────
+
+async function getQuotationStopIds(
+  quotationId: string
+): Promise<{ senderStopId: string; recipientStopId: string } | null> {
+  const path = `/v3/quotations/${quotationId}`;
+  const response = await fetch(`${getBaseUrl()}${path}`, { headers: buildHeaders("GET", path) });
+  if (!response.ok) return null;
+  const json = await response.json();
+  const stops = (json.data ?? json)?.stops as Array<{ stopId: string }> | undefined;
+  if (!stops || stops.length < 2) return null;
+  return { senderStopId: stops[0].stopId, recipientStopId: stops[1].stopId };
+}
+
+// ──────────────────────────────────────────────
 // CRIAÇÃO DE PEDIDO
 // ──────────────────────────────────────────────
 
@@ -127,20 +146,36 @@ export async function createLalamoveOrder(
 ): Promise<{ orderId: string; shareLink?: string } | LalamoveNotConfigured> {
   if (!isLalamoveConfigured()) return NOT_CONFIGURED;
 
+  // 1) stopIds reais da cotação — sem eles o Lalamove rejeita o pedido.
+  //    null normalmente significa cotação expirada/inválida.
+  const stopIds = await getQuotationStopIds(quotationId);
+  if (!stopIds) {
+    throw new Error("Não foi possível obter os stopIds da cotação Lalamove (cotação pode ter expirado).");
+  }
+
+  // 2) telefones em E.164 — o Lalamove rejeita formato cru com 422 ERR_INVALID_FIELD.
+  const recipientPhone = toE164(destinationStop.phone);
+  if (!recipientPhone) {
+    throw new Error("Telefone do cliente inválido — Lalamove exige um número válido.");
+  }
+  // Telefone da loja: prefere o da loja; se faltar/inválido, usa o do destinatário
+  // (um cadastro de loja sem telefone não pode travar o despacho).
+  const formattedSenderPhone = toE164(senderPhone) ?? recipientPhone;
+
   const path = "/v3/orders";
   // Lalamove v3 também exige wrapper { "data": { ... } } pra criar pedido
   const innerBody = {
     quotationId,
     sender: {
-      stopId: "1",
+      stopId: stopIds.senderStopId,
       name: "Mestre da Pintura",
-      phone: senderPhone,
+      phone: formattedSenderPhone,
     },
     recipients: [
       {
-        stopId: "2",
+        stopId: stopIds.recipientStopId,
         name: destinationStop.name || "Cliente",
-        phone: destinationStop.phone || "",
+        phone: recipientPhone,
       },
     ],
     isRecipientSMSEnabled: true,

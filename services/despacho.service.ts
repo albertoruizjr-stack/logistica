@@ -180,7 +180,39 @@ export async function createDispatch(input: CreateDispatchInput) {
     return dispatch;
   });
 
-  // ── FASE 2: chamar API Lalamove FORA da transaction ──
+  // ── FASE 2: vincular pedido Lalamove ──
+  // Caminho A (roteirização): o pedido JÁ foi criado antes do despacho. Aqui só
+  // persistimos o vínculo — sem chamar a API de novo (evita pedido duplicado/fantasma).
+  if (
+    dispatch.modal === DispatchModal.LALAMOVE &&
+    input.deliveryRequestId &&
+    input.lalamovePrecreated
+  ) {
+    const pre = input.lalamovePrecreated;
+    await prisma.lalamoveOrder.create({
+      data: {
+        dispatchId: dispatch.id,
+        lalamoveOrderId: pre.lalamoveOrderId,
+        quotationId: pre.quotationId,
+        status: "ASSIGNING_DRIVER",
+        internalStatus: DispatchStatus.PENDING,
+        estimatedPrice: pre.estimatedPrice,
+        shareLink: pre.shareLink,
+        currency: "BRL",
+      },
+    });
+    await prisma.dispatch.update({
+      where: { id: dispatch.id },
+      data: {
+        lalamoveOrderId: pre.lalamoveOrderId,
+        estimatedCost: pre.estimatedPrice ?? input.estimatedCost,
+      },
+    });
+    console.info(`[Lalamove] Pedido pré-criado vinculado: ${pre.lalamoveOrderId} — dispatch ${dispatch.id}`);
+    return dispatch;
+  }
+
+  // Caminho B (fluxo automático /despacho): chamar API Lalamove FORA da transaction.
   // Se falhar, o dispatch já está no banco — operador pode retentar.
   if (dispatch.modal === DispatchModal.LALAMOVE && input.deliveryRequestId) {
     try {

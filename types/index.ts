@@ -506,6 +506,14 @@ export interface CreateDispatchInput {
   notes?: string;
   serviceType?: string;
   quotationId?: string;
+  // Pedido Lalamove já criado ANTES do despacho (fluxo de roteirização):
+  // quando presente, createDispatch só persiste o vínculo, sem chamar a API de novo.
+  lalamovePrecreated?: {
+    lalamoveOrderId: string;
+    quotationId?: string;
+    estimatedPrice?: number;
+    shareLink?: string;
+  };
 }
 
 // ──────────────────────────────────────────────
