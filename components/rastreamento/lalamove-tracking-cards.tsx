@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { LALAMOVE_VEHICLE_LABELS } from "@/lib/constants";
@@ -63,10 +63,60 @@ function formatPrice(price: number): string {
 }
 
 // ──────────────────────────────────────────────
+// POLLING DE STATUS (webhook não configurado)
+//
+// Enquanto há corridas ativas, dispara POST /api/lalamove/sync a cada 30s para
+// puxar status/motorista/placa da API do Lalamove, e então router.refresh()
+// re-renderiza com os dados frescos do banco (a página é force-dynamic).
+// Sincroniza também no mount para refletir imediatamente ao abrir a tela.
+// ──────────────────────────────────────────────
+
+const POLL_INTERVAL_MS = 30_000;
+
+function useLalamovePolling(activeCount: number) {
+  const router = useRouter();
+  const inFlight = useRef(false);
+
+  useEffect(() => {
+    // Sem corridas ativas → nada a sincronizar.
+    if (activeCount === 0) return;
+
+    let cancelled = false;
+
+    async function syncOnce() {
+      // Evita chamadas sobrepostas (uma requisição lenta não acumula outras).
+      if (inFlight.current) return;
+      inFlight.current = true;
+      try {
+        const res = await fetch("/api/lalamove/sync", { method: "POST" });
+        if (!cancelled && res.ok) {
+          router.refresh(); // re-renderiza com os dados frescos do banco
+        }
+      } catch {
+        // Erros de rede são ignorados — a próxima rodada tenta de novo.
+      } finally {
+        inFlight.current = false;
+      }
+    }
+
+    // Sincroniza ao abrir a tela e depois a cada intervalo.
+    void syncOnce();
+    const interval = setInterval(() => void syncOnce(), POLL_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [activeCount, router]);
+}
+
+// ──────────────────────────────────────────────
 // COMPONENTE PRINCIPAL
 // ──────────────────────────────────────────────
 
 export function LalamoveTrackingCards({ rides }: { rides: LalamoveRide[] }) {
+  useLalamovePolling(rides.length);
+
   if (rides.length === 0) {
     return (
       <p className="text-sm text-gray-400">Nenhuma corrida Lalamove ativa no momento.</p>

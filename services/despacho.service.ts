@@ -345,6 +345,71 @@ export async function updateDispatchStatus(
 }
 
 // ──────────────────────────────────────────────
+// REVERTER CORRIDA LALAMOVE → ENTREGA ELEGÍVEL
+//
+// Lógica compartilhada entre o cancelamento manual (/api/lalamove/cancelar)
+// e o polling de status (lalamove-sync.service) quando a corrida entra em
+// estado terminal de falha (CANCELLED/REJECTED/EXPIRED).
+//
+// Detacha o dispatch da entrega (deliveryRequestId = null) em vez de deletá-lo
+// — FKs de lalamove_orders/freight_audit apontam pro dispatch. A entrega volta
+// para PRONTO_ROTEIRIZACAO para poder ser re-despachada.
+//
+// IMPORTANTE: a transição DISPATCHED → PRONTO_ROTEIRIZACAO NÃO é permitida pela
+// state machine (DISPATCHED só vai para IN_TRANSIT/OCORRENCIA). Por isso a
+// reversão escreve direto no deliveryRequest + deliveryStatusHistory, fora da
+// state machine — é uma reversão administrativa intencional.
+// ──────────────────────────────────────────────
+
+export async function revertDispatchToEligible(params: {
+  lalamoveOrderId: string;       // id interno (PK) da LalamoveOrder
+  lalamoveStatus: string;        // status bruto Lalamove (CANCELLED/REJECTED/EXPIRED)
+  dispatchId: string | null;
+  deliveryRequestId: string | null;
+  changedById: string;           // userId do operador, ou "SYSTEM" no polling
+  failureReason: string;
+  historyReason: string;
+}) {
+  const { lalamoveOrderId, lalamoveStatus, dispatchId, deliveryRequestId, changedById, failureReason, historyReason } = params;
+
+  await prisma.$transaction(async (tx) => {
+    await tx.lalamoveOrder.update({
+      where: { id: lalamoveOrderId },
+      data: { status: lalamoveStatus, internalStatus: DispatchStatus.FAILED },
+    });
+
+    if (dispatchId) {
+      await tx.dispatch.update({
+        where: { id: dispatchId },
+        data: {
+          status: DispatchStatus.FAILED,
+          failedAt: new Date(),
+          deliveryRequestId: null, // detacha pra entrega poder ser re-despachada (unique aceita null)
+          failureReason,
+        },
+      });
+    }
+
+    if (deliveryRequestId) {
+      await tx.deliveryRequest.update({
+        where: { id: deliveryRequestId },
+        data: { status: "PRONTO_ROTEIRIZACAO" },
+      });
+      await tx.deliveryStatusHistory.create({
+        data: {
+          deliveryRequestId,
+          fromStatus: "DISPATCHED",
+          toStatus: "PRONTO_ROTEIRIZACAO",
+          // changedById não tem FK para User no schema — "SYSTEM" é seguro como marcador.
+          changedById,
+          reason: historyReason,
+        },
+      });
+    }
+  });
+}
+
+// ──────────────────────────────────────────────
 // LISTAGEM DE DESPACHOS PENDENTES (painel operacional)
 // ──────────────────────────────────────────────
 

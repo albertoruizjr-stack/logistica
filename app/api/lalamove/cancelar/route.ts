@@ -4,6 +4,7 @@ import { getSessionFromRequest } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { apiSuccess, apiError } from "@/types";
 import { cancelLalamoveOrder } from "@/services/lalamove.service";
+import { revertDispatchToEligible } from "@/services/despacho.service";
 
 const ROLES = ["ADMIN", "OPERATOR", "LOGISTICS_OPERATOR"];
 const schema = z.object({
@@ -44,41 +45,16 @@ export async function POST(req: NextRequest) {
     }
 
     const dispatch = lalamoveOrder.dispatch;
-    const deliveryRequestId = dispatch?.deliveryRequestId ?? null;
 
-    // 3) Reverte tudo localmente em uma transação.
-    await prisma.$transaction(async (tx) => {
-      await tx.lalamoveOrder.update({
-        where: { id: lalamoveOrder.id },
-        data: { status: "CANCELLED", internalStatus: "FAILED" },
-      });
-
-      if (dispatch) {
-        await tx.dispatch.update({
-          where: { id: dispatch.id },
-          data: {
-            status: "FAILED",
-            deliveryRequestId: null, // detacha pra entrega poder ser re-despachada (unique aceita null)
-            failureReason: "Corrida cancelada pelo operador",
-          },
-        });
-      }
-
-      if (deliveryRequestId) {
-        await tx.deliveryRequest.update({
-          where: { id: deliveryRequestId },
-          data: { status: "PRONTO_ROTEIRIZACAO" },
-        });
-        await tx.deliveryStatusHistory.create({
-          data: {
-            deliveryRequestId,
-            fromStatus: "DISPATCHED",
-            toStatus: "PRONTO_ROTEIRIZACAO",
-            changedById: session.userId,
-            reason: "Corrida Lalamove cancelada — devolvida para elegível",
-          },
-        });
-      }
+    // 3) Reverte tudo localmente (mesma lógica usada pelo polling de status).
+    await revertDispatchToEligible({
+      lalamoveOrderId: lalamoveOrder.id,
+      lalamoveStatus: "CANCELLED",
+      dispatchId: dispatch?.id ?? null,
+      deliveryRequestId: dispatch?.deliveryRequestId ?? null,
+      changedById: session.userId,
+      failureReason: "Corrida cancelada pelo operador",
+      historyReason: "Corrida Lalamove cancelada — devolvida para elegível",
     });
 
     return NextResponse.json(apiSuccess({ lalamoveCancelled }));
