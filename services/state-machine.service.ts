@@ -78,6 +78,7 @@ export interface TransitionMetadata {
   waveId?: string;              // opcional — wave que originou a rota
   // DISPATCHED (rota)
   dispatchedByRoute?: boolean;  // marca que o dispatch veio de uma Route inteira
+  autoAdvance?: boolean;        // marca avanço automático de estados pulados (ex: concluir sem despacho)
   // SEPARADO com divergências (auto via transfer)
   hasDivergences?: boolean;
   totalDivergences?: number;

@@ -9,6 +9,77 @@ import { prisma } from "@/lib/prisma";
 import { DispatchModal, DispatchStatus, type Prisma } from "@prisma/client";
 import { transitionDeliveryRequest } from "./state-machine.service";
 import { extractDeliveryRequestIds, isManualStop, type RouteSequenceEntry } from "@/lib/route-sequence";
+import { pathToInTransit } from "@/lib/delivery-progression";
+
+// ──────────────────────────────────────────────
+// AUTO-AVANÇO ATÉ IN_TRANSIT
+// O app do motorista expõe a entrega já em ROTEIRIZADO (rota ACTIVE, antes do
+// despacho — ver lib/driver-ownership.ts). Se o escritório não despachou, o
+// motorista travava ao concluir (concluir exige IN_TRANSIT). Esta função garante
+// que a entrega chega a IN_TRANSIT, criando o despacho que faltar e avançando os
+// estados pulados. Idempotente: se já está em IN_TRANSIT, não faz nada.
+// ──────────────────────────────────────────────
+
+export async function ensureDeliveryInTransit(
+  deliveryRequestId: string,
+  actorId: string,
+  actorRole: string,
+): Promise<{ from: string; advanced: string[] }> {
+  const dr = await prisma.deliveryRequest.findUnique({
+    where:  { id: deliveryRequestId },
+    select: { id: true, status: true, storeId: true },
+  });
+  if (!dr) throw new Error("Entrega não encontrada");
+
+  const path = pathToInTransit(dr.status);
+  // null = estado de onde não se auto-avança; [] = já em IN_TRANSIT. Nada a fazer.
+  if (!path || path.length === 0) return { from: dr.status, advanced: [] };
+
+  // O gate de DISPATCHED exige um Dispatch. Cria se faltar, herdando
+  // motorista/rota da Route ativa que contém esta entrega.
+  if (path.includes("DISPATCHED")) {
+    const existing = await prisma.dispatch.findUnique({
+      where:  { deliveryRequestId },
+      select: { id: true },
+    });
+    if (!existing) {
+      const routes = await prisma.$queryRaw<
+        { id: string; driverId: string; spokeRouteId: string | null }[]
+      >`
+        SELECT id, "driverId", "spokeRouteId" FROM routes
+        WHERE status IN ('ACTIVE', 'DISPATCHED')
+          AND "sequenceJson" @> ${JSON.stringify([{ deliveryRequestId }])}::jsonb
+        ORDER BY "createdAt" DESC
+        LIMIT 1
+      `;
+      const route = routes[0];
+      await prisma.dispatch.create({
+        data: {
+          deliveryRequestId,
+          storeId:        dr.storeId,
+          modal:          DispatchModal.INTERNAL_ROUTE,
+          status:         DispatchStatus.IN_TRANSIT,
+          driverId:       route?.driverId ?? null,
+          routeId:        route?.id ?? null,
+          spokeRouteId:   route?.spokeRouteId ?? null,
+          dispatchedById: actorId,
+          dispatchedAt:   new Date(),
+        },
+      });
+    }
+  }
+
+  for (const toStatus of path) {
+    await transitionDeliveryRequest({
+      requestId: deliveryRequestId,
+      actorId,
+      actorRole,
+      toStatus,
+      metadata: { autoAdvance: true, reason: "Auto-avanço ao concluir entrega (rota não despachada)" },
+    });
+  }
+  return { from: dr.status, advanced: path };
+}
 
 export async function dispatchRoute(routeId: string, operatorId: string) {
   const route = await prisma.route.findUnique({
@@ -25,7 +96,7 @@ export async function dispatchRoute(routeId: string, operatorId: string) {
   // de passagem sem solicitação vinculada — entram no roteiro mas não geram despacho.
   const drIds = extractDeliveryRequestIds(sequence);
 
-  // Validar que todas DRs existem e estão em ROTEIRIZADO
+  // Validar que todas DRs existem
   const drs = await prisma.deliveryRequest.findMany({
     where:  { id: { in: drIds } },
     select: { id: true, status: true, orderNumber: true },
@@ -33,10 +104,14 @@ export async function dispatchRoute(routeId: string, operatorId: string) {
   if (drs.length !== drIds.length) {
     throw new Error("Uma ou mais solicitações da rota não foram encontradas.");
   }
-  const notRouted = drs.filter((d) => d.status !== "ROTEIRIZADO");
-  if (notRouted.length > 0) {
-    const ids = notRouted.map((d) => d.orderNumber ?? d.id.slice(-6)).join(", ");
-    throw new Error(`Solicitações não estão em ROTEIRIZADO: ${ids}`);
+  // Só despacha as paradas em ROTEIRIZADO. Paradas já em OCORRENCIA (motorista
+  // registrou problema), DELIVERED ou CANCELLED são puladas — antes o despacho
+  // quebrava a rota inteira se qualquer parada não estivesse em ROTEIRIZADO.
+  const dispatchableIds = new Set(
+    drs.filter((d) => d.status === "ROTEIRIZADO").map((d) => d.id),
+  );
+  if (dispatchableIds.size === 0) {
+    throw new Error("Nenhuma parada em ROTEIRIZADO para despachar nesta rota.");
   }
 
   const now = new Date();
@@ -48,6 +123,7 @@ export async function dispatchRoute(routeId: string, operatorId: string) {
   await prisma.$transaction(async (tx) => {
     for (const stop of sequence) {
       if (isManualStop(stop)) continue; // parada manual não gera Dispatch
+      if (!dispatchableIds.has(stop.deliveryRequestId!)) continue; // pula OCORRENCIA/finalizadas
       const dispatch = await tx.dispatch.create({
         data: {
           deliveryRequestId: stop.deliveryRequestId!,
@@ -83,6 +159,7 @@ export async function dispatchRoute(routeId: string, operatorId: string) {
   // é uma única ação. Fora da transação porque a state machine cria a própria.
   for (const stop of sequence) {
     if (isManualStop(stop)) continue; // parada manual não tem DR para transicionar
+    if (!dispatchableIds.has(stop.deliveryRequestId!)) continue; // pula OCORRENCIA/finalizadas
     try {
       await transitionDeliveryRequest({
         requestId: stop.deliveryRequestId!,
