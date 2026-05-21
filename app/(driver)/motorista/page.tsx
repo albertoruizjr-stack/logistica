@@ -2,17 +2,18 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { Truck, MapPin, Clock, CheckCircle2, AlertTriangle, Store } from "lucide-react";
+import { Truck, MapPin, Clock, CheckCircle2, AlertTriangle, Store, Package } from "lucide-react";
 import IniciarRotaButton from "./_components/iniciar-rota-button";
 
 interface SequenceStop {
   stopPosition:       number | null;
   deliveryRequestId?: string;
-  type?:              "DELIVERY" | "STORE_VISIT" | "EXTRA_STOP";
+  type?:              "DELIVERY" | "STORE_VISIT" | "EXTRA_STOP" | "TRANSFER_PICKUP";
   storeId?:           string;
   address?:           string;
   notes?:             string;
   stopId?:            string;
+  transferIds?:       string[];
   eta:                string | number | null;
 }
 
@@ -75,6 +76,17 @@ export default async function MotoristaHomePage() {
       .map((s) => s.storeId!);
   });
 
+  // Coleta os transferIds de todas as paradas TRANSFER_PICKUP (coleta de transferência)
+  const allPickupTransferIds = Array.from(new Set(
+    routes.flatMap((r) => {
+      const seq = (r.sequenceJson as unknown as SequenceStop[] | null) ?? [];
+      return seq
+        .filter((s) => s.type === "TRANSFER_PICKUP")
+        .flatMap((s) => s.transferIds ?? [])
+        .filter((id): id is string => Boolean(id));
+    }),
+  ));
+
   const [stopsMeta, stopsStores] = await Promise.all([
     allStopIds.length > 0
       ? prisma.deliveryRequest.findMany({
@@ -98,6 +110,22 @@ export default async function MotoristaHomePage() {
   ]);
   const metaMap  = new Map(stopsMeta.map((s) => [s.id, s]));
   const storeMap = new Map(stopsStores.map((s) => [s.id, s]));
+
+  // Transferências das paradas de coleta — mapa por id pra contar/documentar/saber status.
+  const pickupTransfers = allPickupTransferIds.length > 0
+    ? await prisma.transfer.findMany({
+        where:  { id: { in: allPickupTransferIds } },
+        select: {
+          id:            true,
+          teNumber:      true,
+          nfCitelNumero: true,
+          fromStoreId:   true,
+          status:        true,
+          _count:        { select: { items: true } },
+        },
+      })
+    : [];
+  const transferMap = new Map(pickupTransfers.map((t) => [t.id, t]));
 
   return (
     <div className="space-y-4">
@@ -182,6 +210,52 @@ export default async function MotoristaHomePage() {
                             <Clock className="w-3 h-3" />
                             {etaStr}
                           </p>
+                        )}
+                      </div>
+                    </li>
+                  );
+                }
+
+                // Parada de coleta de transferência (TRANSFER_PICKUP) — várias por loja
+                if (stop.type === "TRANSFER_PICKUP") {
+                  const pickupIds = (stop.transferIds ?? []).filter((id): id is string => Boolean(id));
+                  const rows = pickupIds.map((id) => transferMap.get(id)).filter((t): t is NonNullable<typeof t> => Boolean(t));
+                  const total = pickupIds.length;
+                  const coletadas = rows.filter((t) => t.status === "IN_TRANSIT" || t.status === "RECEIVED").length;
+                  const allDone = total > 0 && coletadas === total;
+                  const store = stop.storeId ? storeMap.get(stop.storeId) : null;
+                  const storeLabel = store
+                    ? `Loja ${store.code} — ${store.name}`
+                    : "Loja de origem";
+
+                  return (
+                    <li key={stop.stopId ?? `pickup-${idx}`} className="bg-indigo-50/60 border-l-2 border-indigo-500">
+                      <div className="flex items-start gap-3 px-4 py-3">
+                        <span className="w-9 h-9 rounded-full bg-indigo-600 text-white text-sm font-bold flex items-center justify-center flex-shrink-0">
+                          {allDone ? <CheckCircle2 className="w-5 h-5" /> : (stop.stopPosition ?? idx + 1)}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-semibold text-indigo-900 flex items-center gap-1.5">
+                            <Package className="w-3.5 h-3.5" />
+                            Coleta · {storeLabel}
+                          </p>
+                          <p className="text-xs text-indigo-700 mt-0.5">
+                            {total} transferência{total > 1 ? "s" : ""}
+                            {coletadas > 0 && !allDone && ` · ${coletadas} coletada${coletadas > 1 ? "s" : ""}`}
+                          </p>
+                        </div>
+                        {allDone ? (
+                          <span className="flex-shrink-0 text-xs font-semibold text-green-700 flex items-center gap-1">
+                            <CheckCircle2 className="w-4 h-4" />
+                            coletado
+                          </span>
+                        ) : (
+                          <Link
+                            href={`/motorista/coleta/${route.id}?store=${stop.storeId ?? ""}`}
+                            className="flex-shrink-0 text-xs font-bold text-white bg-indigo-600 px-3 py-2 rounded-lg active:bg-indigo-700"
+                          >
+                            Coletar
+                          </Link>
                         )}
                       </div>
                     </li>
