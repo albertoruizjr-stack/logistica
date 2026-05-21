@@ -144,6 +144,7 @@ export default async function DashboardPage() {
     sameDayAfterCutoff,
     sameDayExceptionsToday,
     dispatchesHoje,
+    lalamoveDispatchesHoje,
   ] = await Promise.all([
     prisma.deliveryRequest.count({ where: { status: { in: ["PENDING", "AWAITING_ITEMS", "AWAITING_TRANSFER", "READY"] } } }),
     prisma.deliveryRequest.count({ where: { createdAt: { gte: today } } }),
@@ -215,14 +216,21 @@ export default async function DashboardPage() {
       _count: { _all: true },
       _sum: { actualCost: true, estimatedCost: true },
     }),
+    // Linhas Lalamove de hoje — soma per-row (actualCost ?? estimatedCost) pra não
+    // perder o estimado das corridas ainda pendentes quando algumas já concluíram.
+    prisma.dispatch.findMany({
+      where: { modal: "LALAMOVE", dispatchedAt: { gte: today } },
+      select: { actualCost: true, estimatedCost: true },
+    }),
   ]);
 
   // Custo logístico de hoje — split frota própria (sunk cost, conta entregas) x Lalamove (R$)
-  const lalamoveAgg = dispatchesHoje.find((d) => d.modal === "LALAMOVE");
   const frotaCount = dispatchesHoje.find((d) => d.modal === "INTERNAL_ROUTE")?._count._all ?? 0;
-  const lalamoveGasto =
-    (lalamoveAgg?._sum.actualCost ?? 0) || (lalamoveAgg?._sum.estimatedCost ?? 0);
-  const lalamoveCount = lalamoveAgg?._count._all ?? 0;
+  const lalamoveGasto = lalamoveDispatchesHoje.reduce(
+    (acc, d) => acc + (d.actualCost ?? d.estimatedCost ?? 0),
+    0,
+  );
+  const lalamoveCount = lalamoveDispatchesHoje.length;
 
   // Alertas que justificam CTA imediato — ordem: despachos → transferências urgentes → justificativas
   const alertItems: { message: string; time: string | null; href: string; cta: string }[] = [];

@@ -289,12 +289,19 @@ export default function NovaWaveForm({
             {eligibleRequests.map((r) => {
               const isSelected = reqIds.has(r.id);
               return (
-                <button
+                <div
                   key={r.id}
-                  type="button"
+                  role="button"
+                  tabIndex={0}
                   onClick={() => toggleReq(r.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      if (e.key === " ") e.preventDefault();
+                      toggleReq(r.id);
+                    }
+                  }}
                   className={cn(
-                    "w-full flex items-center gap-3 px-3 py-2 text-left transition-colors",
+                    "w-full flex items-center gap-3 px-3 py-2 text-left transition-colors cursor-pointer",
                     isSelected ? "bg-orange-50" : "bg-white hover:bg-gray-50",
                   )}
                 >
@@ -324,26 +331,18 @@ export default function NovaWaveForm({
                     ) : null}
                     {r.totalWeightKg != null && <p>{r.totalWeightKg.toFixed(0)} kg</p>}
                   </div>
-                  <span
-                    role="button"
-                    tabIndex={0}
+                  <button
+                    type="button"
                     onClick={(e) => {
                       e.stopPropagation();
                       setLalaTarget(r);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.stopPropagation();
-                        e.preventDefault();
-                        setLalaTarget(r);
-                      }
                     }}
                     className="flex-shrink-0 flex items-center gap-1 px-2 py-1 rounded-md border border-gray-200 text-[11px] font-medium text-gray-500 hover:border-orange-300 hover:text-orange-600 hover:bg-orange-50 transition-colors"
                   >
                     <Truck className="w-3 h-3" />
                     Lalamove
-                  </span>
-                </button>
+                  </button>
+                </div>
               );
             })}
           </div>
