@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { apiSuccess, apiError } from "@/types";
 import { buildLalamoveStops } from "@/lib/lalamove-dispatch";
 import { getLalamoveQuote } from "@/services/lalamove.service";
+import { geocodeAddress } from "@/lib/google-maps";
 
 const ROLES = ["ADMIN", "OPERATOR", "LOGISTICS_OPERATOR"];
 const schema = z.object({ deliveryRequestId: z.string().min(1), serviceType: z.string().min(1) });
@@ -26,8 +27,26 @@ export async function POST(req: NextRequest) {
     });
     if (!dr) return NextResponse.json(apiError("Entrega não encontrada", "NOT_FOUND"), { status: 404 });
 
-    const stops = buildLalamoveStops(dr.store, dr);
-    if (!stops) return NextResponse.json(apiError("Entrega sem coordenadas — não dá pra cotar", "NO_COORDS"), { status: 422 });
+    // A roteirização interna não exige lat/lng (o Spoke geocodifica), então a maioria
+    // das entregas chega aqui sem coordenadas. O Lalamove precisa delas: geocodifica o
+    // endereço (cache + Google/Nominatim) e persiste, pra fazer só uma vez e o passo de
+    // confirmar (despacho) já encontrar as coordenadas salvas.
+    let deliveryLat = dr.deliveryLat;
+    let deliveryLng = dr.deliveryLng;
+    if ((deliveryLat == null || deliveryLng == null) && dr.deliveryAddress) {
+      const geo = await geocodeAddress(dr.deliveryAddress);
+      if (geo) {
+        deliveryLat = geo.lat;
+        deliveryLng = geo.lng;
+        await prisma.deliveryRequest.update({
+          where: { id: body.data.deliveryRequestId },
+          data:  { deliveryLat, deliveryLng },
+        });
+      }
+    }
+
+    const stops = buildLalamoveStops(dr.store, { ...dr, deliveryLat, deliveryLng });
+    if (!stops) return NextResponse.json(apiError("Não foi possível localizar o endereço da entrega no mapa — confira o endereço.", "NO_COORDS"), { status: 422 });
 
     const quote = await getLalamoveQuote(stops.origin, stops.destination, false, body.data.serviceType);
     if ("reason" in quote) return NextResponse.json(apiError("Lalamove não configurado/indisponível", "LALAMOVE_OFF"), { status: 503 });
