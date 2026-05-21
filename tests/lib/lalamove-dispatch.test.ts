@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import { buildLalamoveStops, dispatchViaLalamove } from "@/lib/lalamove-dispatch";
 
 // mock do serviço Lalamove (evita HTTP real nos testes)
@@ -131,5 +131,21 @@ describe("dispatchViaLalamove", () => {
     });
     expect(result).toBeNull();
     expect(getLalamoveQuote).not.toHaveBeenCalled();
+  });
+
+  it("usa o serviceType informado na cotação", async () => {
+    (getLalamoveQuote as Mock).mockResolvedValue({
+      quotationId: "Q1", priceBreakdown: { total: "34.50", currency: "BRL" }, stops: [],
+    });
+    (createLalamoveOrder as Mock).mockResolvedValue({ orderId: "O1", shareLink: "http://x" });
+    await dispatchViaLalamove(mockStore, mockDeliveryRequest, { serviceType: "UV_FIORINO" });
+    expect((getLalamoveQuote as Mock).mock.calls[0][3]).toBe("UV_FIORINO");
+  });
+
+  it("pula a cotação quando recebe quotationId pronto", async () => {
+    (createLalamoveOrder as Mock).mockResolvedValue({ orderId: "O1", shareLink: "http://x" });
+    const r = await dispatchViaLalamove(mockStore, mockDeliveryRequest, { quotationId: "Q-PRONTO", estimatedPrice: 34.5 });
+    expect(getLalamoveQuote).not.toHaveBeenCalled();
+    expect(r?.lalamoveOrderId).toBe("O1");
   });
 });

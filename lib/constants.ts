@@ -97,6 +97,15 @@ export const LALAMOVE_API_BASE_URL = "https://rest.lalamove.com";
 // Sandbox URL corrigida: oficial é "rest.sandbox.lalamove.com" (não "sandbox-rest.lalamove.com")
 export const LALAMOVE_SANDBOX_URL = "https://rest.sandbox.lalamove.com";
 
+// Labels amigáveis por tipo de veículo Lalamove (para exibição ao operador)
+export const LALAMOVE_VEHICLE_LABELS: Record<string, string> = {
+  LALAPRO:    "LalaPro (moto)",
+  UV_FIORINO: "Utilitário (Fiorino)",
+  VAN:        "Van",
+  TRUCK330:   "Carreto",
+  TRUCK3_5T:  "Caminhão 2,5t",
+};
+
 // Motor de Decisão — identity map (códigos internos = códigos da API agora).
 export const LALAMOVE_VEHICLE_MAP: Record<keyof typeof LalamoveServiceType, string> = {
   LALAPRO:    "LALAPRO",

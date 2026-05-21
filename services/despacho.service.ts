@@ -204,7 +204,11 @@ export async function createDispatch(input: CreateDispatchInput) {
       if (!store || !deliveryRequest) {
         console.warn("[Lalamove] Store ou DeliveryRequest não encontrada — dispatch sem pedido Lalamove.");
       } else {
-        const result = await dispatchViaLalamove(store, deliveryRequest);
+        const result = await dispatchViaLalamove(store, deliveryRequest, {
+          serviceType: input.serviceType,
+          quotationId: input.quotationId,
+          estimatedPrice: input.estimatedCost,
+        });
 
         if (!result) {
           console.warn("[Lalamove] Coordenadas ausentes na solicitação — dispatch sem pedido Lalamove.");

@@ -504,6 +504,8 @@ export interface CreateDispatchInput {
   estimatedCost?: number;
   dispatchedById: string;
   notes?: string;
+  serviceType?: string;
+  quotationId?: string;
 }
 
 // ──────────────────────────────────────────────

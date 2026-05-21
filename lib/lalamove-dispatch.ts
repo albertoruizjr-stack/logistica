@@ -69,28 +69,37 @@ export function buildLalamoveStops(
 // Lança exceção se a API Lalamove falhar (o chamador decide como tratar).
 // ──────────────────────────────────────────────
 
+export interface DispatchViaLalamoveOpts {
+  serviceType?: string;
+  quotationId?: string;
+  estimatedPrice?: number;
+}
+
 export async function dispatchViaLalamove(
   store: StoreInfo,
-  deliveryRequest: DeliveryInfo
+  deliveryRequest: DeliveryInfo,
+  opts: DispatchViaLalamoveOpts = {},
 ): Promise<LalamovedDispatch | null> {
   const stops = buildLalamoveStops(store, deliveryRequest);
   if (!stops) return null;
 
-  const quote = await getLalamoveQuote(stops.origin, stops.destination);
-  if ("reason" in quote) return null;
+  let quotationId = opts.quotationId;
+  let estimatedPrice = opts.estimatedPrice ?? 0;
 
-  const order = await createLalamoveOrder(
-    quote.quotationId,
-    stops.origin,
-    stops.destination,
-    store.phone ?? ""
-  );
+  if (!quotationId) {
+    const quote = await getLalamoveQuote(stops.origin, stops.destination, false, opts.serviceType);
+    if ("reason" in quote) return null;
+    quotationId = quote.quotationId;
+    estimatedPrice = parseFloat(quote.priceBreakdown.total);
+  }
+
+  const order = await createLalamoveOrder(quotationId, stops.origin, stops.destination, store.phone ?? "");
   if ("reason" in order) return null;
 
   return {
     lalamoveOrderId: order.orderId,
-    quotationId: quote.quotationId,
-    estimatedPrice: parseFloat(quote.priceBreakdown.total),
+    quotationId,
+    estimatedPrice,
     shareLink: order.shareLink,
   };
 }
