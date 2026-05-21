@@ -6,7 +6,7 @@ import { transitionDeliveryRequest } from "@/services/state-machine.service";
 import { uploadProofPhoto, isStorageConfigured } from "@/lib/supabase-storage";
 import { checkAndCompleteRouteFromDeliveryRequest, ensureDeliveryInTransit, completeDispatchForDelivery } from "@/services/route-dispatch.service";
 import { isDeliveryAssignedToDriver } from "@/lib/driver-ownership";
-import { isDeliveryPhotoRequired } from "@/services/system-config.service";
+import { isDeliveryPhotoRequired, isRouteStartPhotoRequired } from "@/services/system-config.service";
 
 const MAX_PHOTO_BYTES = 10 * 1024 * 1024; // 10 MB
 
@@ -46,6 +46,48 @@ export async function POST(
     const isMine = await isDeliveryAssignedToDriver(dr.id, driver.id);
     if (!isMine) {
       return NextResponse.json(apiError("Entrega não é sua", "FORBIDDEN"), { status: 403 });
+    }
+
+    // Gate dormente: quando REQUIRE_ROUTE_START_PHOTO == "true", exige que a rota
+    // da entrega tenha sido iniciada (foto de saída) antes de finalizar.
+    // DEFAULT FALSE → não bloqueia nada hoje. Se não der pra resolver a rota, não bloqueia.
+    const requireRouteStart = await isRouteStartPhotoRequired();
+    if (requireRouteStart) {
+      try {
+        // 1) Rota via dispatch direto da DR (fase pós-despacho).
+        const dispatch = await prisma.dispatch.findUnique({
+          where:  { deliveryRequestId: dr.id },
+          select: { routeId: true },
+        });
+        let routeStartedAt: Date | null | undefined;
+        if (dispatch?.routeId) {
+          const route = await prisma.route.findUnique({
+            where:  { id: dispatch.routeId },
+            select: { startedAt: true },
+          });
+          routeStartedAt = route?.startedAt;
+        } else {
+          // 2) Fase pré-despacho: rota cujo sequenceJson contém esta DR.
+          const rows = await prisma.$queryRaw<{ startedAt: Date | null }[]>`
+            SELECT "startedAt" FROM routes
+            WHERE status IN ('ACTIVE', 'DISPATCHED')
+              AND "sequenceJson" @> ${JSON.stringify([{ deliveryRequestId: dr.id }])}::jsonb
+            LIMIT 1
+          `;
+          if (rows.length > 0) routeStartedAt = rows[0].startedAt;
+        }
+
+        // Só bloqueia se conseguimos resolver a rota E ela não foi iniciada.
+        if (routeStartedAt !== undefined && !routeStartedAt) {
+          return NextResponse.json(
+            apiError("Inicie a rota (com foto de saída) antes de finalizar entregas.", "ROUTE_NOT_STARTED"),
+            { status: 400 },
+          );
+        }
+      } catch (err) {
+        // Falha ao resolver a rota não deve travar a entrega (gate robusto).
+        console.error(`[concluir] gate ROUTE_NOT_STARTED falhou pra DR ${dr.id}`, err);
+      }
     }
 
     const form = await req.formData();

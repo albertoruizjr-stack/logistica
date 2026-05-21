@@ -57,6 +57,31 @@ export async function uploadProofPhoto(args: {
   return { path, publicUrl: signed.signedUrl };
 }
 
+// Upload da foto de início de rota (veículo carregado ao sair da loja).
+// path: "route_{routeId}/START_{timestamp}.{ext}" — mesmo bucket dos comprovantes.
+export async function uploadRouteStartPhoto(args: {
+  routeId:     string;
+  buffer:      Buffer;
+  contentType: string;
+  extension:   string;          // "jpg", "png", "webp"
+}): Promise<UploadResult> {
+  const client = getClient();
+  const path = `route_${args.routeId}/START_${Date.now()}.${args.extension}`;
+
+  const { error: upErr } = await client.storage.from(BUCKET).upload(path, args.buffer, {
+    contentType: args.contentType,
+    upsert:      false,
+  });
+  if (upErr) throw new Error(`Upload Storage falhou: ${upErr.message}`);
+
+  const { data: signed, error: urlErr } = await client.storage
+    .from(BUCKET)
+    .createSignedUrl(path, 60 * 60 * 24 * 30);
+  if (urlErr || !signed) throw new Error(`URL assinada falhou: ${urlErr?.message ?? "sem dados"}`);
+
+  return { path, publicUrl: signed.signedUrl };
+}
+
 // Regera URL assinada pra uma foto já armazenada (usado em telas admin/auditoria)
 export async function getSignedProofUrl(path: string, expirySeconds = 3600): Promise<string> {
   const client = getClient();

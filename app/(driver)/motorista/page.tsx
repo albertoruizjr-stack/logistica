@@ -3,6 +3,7 @@ import Link from "next/link";
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { Truck, MapPin, Clock, CheckCircle2, AlertTriangle, Store } from "lucide-react";
+import IniciarRotaButton from "./_components/iniciar-rota-button";
 
 interface SequenceStop {
   stopPosition:       number | null;
@@ -133,6 +134,16 @@ export default async function MotoristaHomePage() {
                   <p className="text-[10px] text-gray-500">entregues</p>
                 </div>
               </div>
+
+              {/* Início de rota: botão de foto (não iniciada) ou status "iniciada às" */}
+              {route.startedAt ? (
+                <p className="mt-2 text-xs font-semibold text-green-700 flex items-center gap-1">
+                  <Truck className="w-3.5 h-3.5" />
+                  Rota iniciada às {route.startedAt.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
+                </p>
+              ) : (
+                <IniciarRotaButton routeId={route.id} />
+              )}
             </div>
 
             {/* Lista de paradas */}

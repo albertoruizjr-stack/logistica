@@ -862,6 +862,10 @@ model Route {
   estimatedReturnAt DateTime?
   totalWeightKg     Float?
   stopCount         Int?
+  // Foto de início de rota — motorista bate foto do veículo carregado ao sair da loja
+  startedAt      DateTime?
+  startPhotoUrl  String?
+  startPhotoPath String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
