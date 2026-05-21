@@ -28,9 +28,12 @@ interface SearchParams {
 // Roles que veem tudo (sem auto-filtro por loja)
 const GLOBAL_VIEW_ROLES = new Set(["ADMIN", "OPERATOR", "LOGISTICS_OPERATOR", "STOCK_OPERATOR"]);
 
-// Agrupamentos funcionais de status
+// Agrupamentos funcionais de status.
+// "Para coletar" = APPROVED (fluxo novo: aprovada já fica disponível para coleta).
+// PREPARED é mantido só para qualquer transferência legada que ainda esteja nesse
+// estado até a migração consolidada; PREPARING saiu (não é mais alcançado).
 const VIEW_STATUS_GROUPS: Record<string, TransferStatus[]> = {
-  "para-coletar": [TransferStatus.APPROVED, TransferStatus.PREPARING, TransferStatus.PREPARED],
+  "para-coletar": [TransferStatus.APPROVED, TransferStatus.PREPARED],
   "em-rota":      [TransferStatus.IN_TRANSIT],
 };
 

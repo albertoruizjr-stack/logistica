@@ -9,7 +9,7 @@
 //   1. Pré-validação e fórmula saldoDisponivelReal
 //   2. Concorrência e lock otimista
 //   3. createTransfer — pré-validação bloqueia criação
-//   4. Fluxo completo: PENDING → APPROVED → PREPARING → IN_TRANSIT → RECEIVED
+//   4. Fluxo completo: PENDING → APPROVED → IN_TRANSIT → RECEIVED
 //   5. Cancelamentos: antes e após NF
 //   6. Divergências e bloqueio de READY
 // ─────────────────────────────────────────────────────────────────────────────
@@ -465,7 +465,7 @@ describe("3. createTransfer — pré-validação de estoque", () => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 4. FLUXO COMPLETO: PENDING → APPROVED → PREPARING → IN_TRANSIT → RECEIVED
+// 4. FLUXO COMPLETO: PENDING → APPROVED → IN_TRANSIT → RECEIVED
 // ═════════════════════════════════════════════════════════════════════════════
 
 describe("4. fluxo completo de transferência", () => {
@@ -485,29 +485,46 @@ describe("4. fluxo completo de transferência", () => {
     expect(db.ledgers.get("store-b_TINT-001")!.qtdEmTransito).toBe(3);
   });
 
-  it("PREPARING → NENHUMA alteração no ledger (apenas separação física)", async () => {
-    const t = seedTransfer(TransferStatus.APPROVED);
+  // Legado: PREPARED → IN_TRANSIT por TE (não fiscal) não altera o ledger da origem
+  // (sem NF, citelTakesOver não roda). Substitui o antigo teste de PREPARING, que era
+  // a etapa intermediária física eliminada no fluxo novo (APPROVED → IN_TRANSIT direto).
+  it("PREPARED → IN_TRANSIT por TE → NENHUMA alteração no ledger da origem", async () => {
+    const t = seedTransfer(TransferStatus.PREPARED, { teNumber: "TE-999" });
     const antes = { ...db.ledgers.get("store-a_TINT-001")! };
 
-    await updateTransferStatus(t.id, { status: TransferStatus.PREPARING });
+    await updateTransferStatus(t.id, { status: TransferStatus.IN_TRANSIT });
 
     const depois = db.ledgers.get("store-a_TINT-001")!;
     expect(depois.qtdComprometida).toBe(antes.qtdComprometida);
-    expect(depois.version).toBe(antes.version); // nenhuma escrita
+    expect(depois.version).toBe(antes.version); // nenhuma escrita na origem
   });
 
-  it("IN_TRANSIT sem nfCitelNumero → lança erro com mensagem exata", async () => {
-    const t = seedTransfer(TransferStatus.PREPARING);
+  // Fluxo novo: APPROVED → IN_TRANSIT direto (sem PREPARING/PREPARED). A coleta
+  // exige um documento (TE OU NF); sem documento, o serviço bloqueia.
+  it("IN_TRANSIT sem documento (TE/NF) → lança erro com mensagem exata", async () => {
+    const t = seedTransfer(TransferStatus.APPROVED);
 
     await expect(
       updateTransferStatus(t.id, { status: TransferStatus.IN_TRANSIT })
     ).rejects.toThrow(
-      "Informe o número da NF emitida no Citel para colocar a transferência em trânsito."
+      "Transferência sem documento (TE/NF) — autorize com o documento antes de coletar."
     );
   });
 
+  // Documento = TE (não fiscal) já gravado na autorização → permite IN_TRANSIT.
+  // TE NÃO dispara citelTakesOver, então qtdComprometida permanece travada no ledger.
+  it("IN_TRANSIT com TE (já gravada) → permitido; qtdComprometida permanece (TE não é fiscal)", async () => {
+    const t = seedTransfer(TransferStatus.APPROVED, { teNumber: "TE-12345" });
+
+    await updateTransferStatus(t.id, { status: TransferStatus.IN_TRANSIT });
+
+    const tf = db.transfers.get(t.id)!;
+    expect(tf.status).toBe(TransferStatus.IN_TRANSIT);
+    expect(db.ledgers.get("store-a_TINT-001")!.qtdComprometida).toBe(3); // TE não aciona citelTakesOver
+  });
+
   it("IN_TRANSIT com nfCitelNumero → qtdComprometida zerada e NF registrada na transferência", async () => {
-    const t = seedTransfer(TransferStatus.PREPARING);
+    const t = seedTransfer(TransferStatus.APPROVED);
 
     await updateTransferStatus(t.id, {
       status: TransferStatus.IN_TRANSIT,

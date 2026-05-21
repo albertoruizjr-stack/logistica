@@ -159,17 +159,23 @@ export async function updateTransferStatus(
   transferId: string,
   input: UpdateTransferStatusInput
 ) {
-  // Validação antecipada: IN_TRANSIT exige nfCitelNumero
-  if (input.status === TransferStatus.IN_TRANSIT && !input.nfCitelNumero) {
-    throw new Error(
-      "Informe o número da NF emitida no Citel para colocar a transferência em trânsito."
-    );
-  }
-
   const current = await prisma.transfer.findUniqueOrThrow({
     where: { id: transferId },
     include: { items: true, deliveryRequest: true },
   });
+
+  // IN_TRANSIT exige um documento da transferência (TE OU NF), informado na
+  // autorização. O documento pode chegar agora (input) OU já estar gravado na
+  // transferência (current). TE → teNumber, NF → nfCitelNumero.
+  if (input.status === TransferStatus.IN_TRANSIT) {
+    const hasDoc =
+      input.teNumber ?? current.teNumber ?? input.nfCitelNumero ?? current.nfCitelNumero;
+    if (!hasDoc) {
+      throw new Error(
+        "Transferência sem documento (TE/NF) — autorize com o documento antes de coletar."
+      );
+    }
+  }
 
   validateStatusTransition(current.status, input.status);
 
@@ -249,7 +255,10 @@ export async function updateTransferStatus(
     }
   }
 
-  // IN_TRANSIT com nova NF → Citel passa a controlar; libera qtdComprometida
+  // IN_TRANSIT com nova NF → Citel passa a controlar; libera qtdComprometida.
+  // Atrelado a nfCitelNumero (fiscal). Uma transferência por TE (não fiscal) NÃO
+  // dispara citelTakesOver — o estoque permanece como qtdComprometida no ledger até
+  // o recebimento (reconcileTransfer). Comportamento aceitável: TE não é documento fiscal.
   if (isNewNf) {
     for (const item of current.items) {
       await citelTakesOver({
@@ -589,9 +598,14 @@ export async function listTransfers(filters: {
 // VALIDAÇÃO DE TRANSIÇÕES DE STATUS
 // ──────────────────────────────────────────────
 
+// Fluxo simplificado (2026-05): a coleta passou a ser feita pelo motorista no app,
+// não pelo operador. APPROVED já fica disponível para coleta e vai direto a IN_TRANSIT.
+// As etapas PREPARING ("iniciar preparação") e PREPARED ("separada") saíram do caminho
+// ativo. PREPARING/PREPARED continuam no enum por compatibilidade; PREPARED → IN_TRANSIT
+// é mantido apenas para qualquer transferência legada que ainda esteja nesse estado.
 const VALID_TRANSITIONS: Record<TransferStatus, TransferStatus[]> = {
   PENDING:    [TransferStatus.APPROVED,   TransferStatus.CANCELLED],
-  APPROVED:   [TransferStatus.PREPARING,  TransferStatus.CANCELLED],
+  APPROVED:   [TransferStatus.IN_TRANSIT, TransferStatus.CANCELLED],
   PREPARING:  [TransferStatus.PREPARED,   TransferStatus.CANCELLED],
   PREPARED:   [TransferStatus.IN_TRANSIT, TransferStatus.CANCELLED],
   IN_TRANSIT: [TransferStatus.RECEIVED,   TransferStatus.CANCELLED],

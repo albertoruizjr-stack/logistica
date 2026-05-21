@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, CheckCircle, ArrowRight, Truck, XCircle, AlertTriangle, FileText } from "lucide-react";
+import { Loader2, CheckCircle, XCircle, AlertTriangle, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // mapeamento das ações disponíveis por status atual
@@ -11,16 +11,18 @@ const NEXT_ACTIONS: Record<string, { label: string; nextStatus: string; icon: Re
     { label: "Aprovar", nextStatus: "APPROVED", icon: CheckCircle, color: "text-blue-600 border-blue-200 hover:bg-blue-50" },
     { label: "Cancelar", nextStatus: "CANCELLED", icon: XCircle, color: "text-red-600 border-red-200 hover:bg-red-50" },
   ],
+  // Fluxo simplificado: aprovada já fica disponível para coleta. A coleta é feita
+  // pelo motorista no app (APPROVED → IN_TRANSIT), via roteirização ("Incluir na rota").
+  // O operador não tem mais "Iniciar preparação"/"Marcar como separada"/"Despachar".
   APPROVED: [
-    { label: "Iniciar preparação", nextStatus: "PREPARING", icon: ArrowRight, color: "text-purple-600 border-purple-200 hover:bg-purple-50" },
     { label: "Cancelar", nextStatus: "CANCELLED", icon: XCircle, color: "text-red-600 border-red-200 hover:bg-red-50" },
   ],
+  // PREPARING/PREPARED só existem para transferências legadas. Sem ações de operador:
+  // qualquer PREPARED pendente é coletada pelo motorista (PREPARED → IN_TRANSIT).
   PREPARING: [
-    { label: "Marcar como separada", nextStatus: "PREPARED", icon: CheckCircle, color: "text-teal-600 border-teal-200 hover:bg-teal-50" },
     { label: "Cancelar", nextStatus: "CANCELLED", icon: XCircle, color: "text-red-600 border-red-200 hover:bg-red-50" },
   ],
   PREPARED: [
-    { label: "Despachar", nextStatus: "IN_TRANSIT", icon: Truck, color: "text-orange-600 border-orange-200 hover:bg-orange-50" },
     { label: "Cancelar", nextStatus: "CANCELLED", icon: XCircle, color: "text-red-600 border-red-200 hover:bg-red-50" },
   ],
   IN_TRANSIT: [
