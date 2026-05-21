@@ -1,88 +1,91 @@
-# Coleta de transferência como parada do roteiro (com foto) — Design
+# Coleta de transferência na roteirização (com foto) — Design v2
 
 **Data:** 2026-05-21
-**Status:** Design para aprovação (Parte 2 do pedido "foto ao iniciar rota / coletar transferência")
-**Parte 1 (foto ao iniciar rota):** já entregue e em produção.
+**Status:** Design refinado pelo Alberto — para aprovação final antes do plano detalhado
+**Parte 1 (foto ao iniciar rota):** entregue e em produção.
 
 ---
 
-## 1. Fluxo desejado (descrito pelo Alberto)
+## 1. Fluxo NOVO de transferência (redesenhado pelo Alberto)
 
-1. Operador solicita a transferência, vincula o pedido, a loja separa.
-2. **A Jane (logística) inclui a coleta na rota de um motorista.**
-3. Isso vira uma parada no roteiro do motorista: **"coleta loja X"**.
-4. O motorista, ao coletar, **tira uma foto pra comprovar a coleta** — exatamente como a foto que comprova a entrega.
+**Simplificação do ciclo** (remove etapas):
+1. Alguém solicita a transferência (PENDING).
+2. A **loja de origem AUTORIZA** → ao clicar "Autorizar", **informa o número da TE** (documento do Autcom, ex.: `000000003000-TE`). Campo obrigatório.
+3. **Eliminadas as etapas `PREPARING` ("iniciar preparação") e `PREPARED` ("separada")** + o botão **"Despachar"** do operador. Ao autorizar (+TE), a transferência **já fica disponível para coleta**.
+4. A coleta **aparece na página de Roteirização** junto das entregas elegíveis — mas renderizada como **"TE {numero} · loja {origem} → loja {destino}"** (em vez de "NF xxxxx").
+5. Botão **"Incluir na rota"** (ao lado de "Criar wave e otimizar") → seleciona a(s) coleta(s) → escolhe a **rota**; o sistema **recomenda o motorista mais próximo** (override por Jane/admin) → a rota do motorista é **atualizada com a parada de coleta**.
+6. O motorista, ao chegar na loja de coleta, **seleciona via checkbox quais transferências está levando** (várias por loja) + tira **foto** → as selecionadas viram **IN_TRANSIT**.
+7. Recebimento na loja de destino segue como hoje (→ RECEIVED).
 
-Ou seja: a coleta passa a ser uma **parada da rota** com **prova por foto**, e marca a transferência como coletada (PREPARED → IN_TRANSIT).
-
----
-
-## 2. O que já existe (base)
-
-- **Rotas** têm `sequenceJson` com paradas: `DELIVERY` (`deliveryRequestId`) e paradas manuais `STORE_VISIT` / `EXTRA_STOP` (sem `deliveryRequestId`). Helpers em `lib/route-sequence.ts` (`isManualStop`, `extractDeliveryRequestIds`).
-- **Não há** vínculo de `transferId` em paradas, nem prova de coleta.
-- **Transfer** state machine: PENDING→APPROVED→PREPARING→**PREPARED**→**IN_TRANSIT**→RECEIVED (`services/transferencia.service.ts`, `updateTransferStatus`). Coleta = PREPARED→IN_TRANSIT.
-- App do motorista (`app/(driver)/motorista/page.tsx`) já renderiza paradas e lida com `STORE_VISIT`. Upload de foto via `lib/supabase-storage.ts` + `compressImage`. Padrão de prova: `DeliveryProof` + `uploadProofPhoto`.
-- Já existe `addExtraStopToRoute` (`app/(app)/roteirizacao/[id]/_components/add-extra-stop-button.tsx`) que adiciona paradas manuais — base pro fluxo da Jane.
+**Ciclo resultante:** `PENDING → APPROVED(+TE) → IN_TRANSIT (motorista coleta + foto) → RECEIVED`.
 
 ---
 
-## 3. Design proposto
+## 2. Mudanças na state machine de Transfer
+- `VALID_TRANSITIONS` (em `services/transferencia.service.ts`): `APPROVED → [IN_TRANSIT, CANCELLED]` (hoje é `APPROVED → [PREPARING, CANCELLED]`). PREPARING/PREPARED saem do caminho ativo.
+- Manter os enums `PREPARING`/`PREPARED` no schema por compatibilidade, mas **não usar** no fluxo novo. **Dados existentes** nesses estados: migrar para `APPROVED` (disponível pra coleta) na migration consolidada.
+- A validação atual exige `nfCitelNumero` para ir a `IN_TRANSIT`. Com o **TE informado na autorização**, esse requisito passa a ser satisfeito pelo TE (ver §4). Ajustar a regra: IN_TRANSIT exige que a transferência tenha TE (não mais a NF Citel no momento da coleta).
 
-### 3.1 Parada de coleta na rota (novo tipo)
-Estender `RouteSequenceEntry` com um tipo `TRANSFER_PICKUP`:
-```
-{ stopPosition?, type: "TRANSFER_PICKUP", transferId: string, storeId: string /* loja de origem (coleta) */, label? }
-```
-- `isManualStop` continua true (sem `deliveryRequestId`), então **não gera Dispatch nem entra em `extractDeliveryRequestIds`** — não quebra despacho/roteirização.
-- Adicionar helper `extractTransferPickupIds(seq)` em `lib/route-sequence.ts`.
+## 3. Aprovar com número da TE
+- A ação "Autorizar/Aprovar" (`/transferencias` e/ou app) passa a pedir o **número da TE** (input obrigatório).
+- Armazenar em `Transfer` — campo **`teNumber String?`** (novo; mais claro que reusar `nfCitelNumero`). O TE é o documento de "Entrada de Mercadorias entre lojas" do Autcom.
+- Endpoint de aprovação atualizado para receber e validar o `teNumber`.
 
-### 3.2 Jane inclui a coleta numa rota (fluxo novo)
-UI pra Jane escolher uma transferência **PREPARED** (separada, aguardando coleta) e atribuí-la à rota de um motorista.
-- Local sugerido: na tela `/transferencias` (aba "Para coletar"), botão **"Incluir na rota de…"** → escolhe o motorista (com rota ACTIVE/DISPATCHED do dia) → adiciona um stop `TRANSFER_PICKUP` no `sequenceJson` da rota.
-- Endpoint: `POST /api/transferencias/[id]/incluir-na-rota` `{ routeId }` → valida transfer PREPARED + rota do motorista → faz push do stop no `sequenceJson`.
-- (Reusar a mecânica de `addExtraStopToRoute`.)
+## 4. Coleta aparece na Roteirização (como item elegível)
+- A página `/roteirizacao` hoje lista entregas `PRONTO_ROTEIRIZACAO`. Passa a listar **também** as transferências `APPROVED` (disponíveis pra coleta), renderizadas como **"TE {teNumber} · {lojaOrigem} → {lojaDestino} · N itens"**.
+- Tecnicamente: a lista de elegíveis vira uma união de `{ tipo: "ENTREGA", deliveryRequest }` e `{ tipo: "COLETA", transfer }`. A UI distingue NF vs TE.
+- **Botão "Incluir na rota"** (ao lado de "Criar wave e otimizar"), habilitado quando há coleta(s) selecionada(s):
+  - abre seletor de **rota** (rotas ACTIVE/DISPATCHED do dia);
+  - **recomenda o motorista mais próximo** da loja de origem da coleta (heurística inicial: motorista cuja rota tem parada mais próxima da loja de origem, ou que está geograficamente mais perto) — **Jane/admin podem escolher outro**;
+  - ao confirmar, adiciona uma parada de coleta no `sequenceJson` da rota escolhida (ver §5).
 
-### 3.3 Motorista coleta com foto (app do motorista)
-- A rota do motorista passa a mostrar as paradas `TRANSFER_PICKUP` ("Coleta · Loja X · N itens").
-- Tela/ação de coleta: botão **"Coletar (com foto)"** → câmera → foto → `POST /api/driver/transferencias/[id]/coletar` (multipart).
-- O endpoint: valida que a transfer está numa rota do motorista logado; sobe a foto; marca a transferência **PREPARED → IN_TRANSIT** via `updateTransferStatus`; grava a foto de coleta.
+## 5. Parada de coleta na rota (várias transferências por loja)
+- Estender `RouteSequenceEntry`: tipo `TRANSFER_PICKUP` com **`storeId` (loja de origem)** e **`transferIds: string[]`** (várias transferências da mesma loja numa parada só) — NÃO `transferId` único.
+- `isManualStop` continua true (sem `deliveryRequestId`) → não vira Dispatch, não entra em `extractDeliveryRequestIds`.
+- Helper `extractTransferIds(seq)` em `lib/route-sequence.ts`.
+- Agrupar por loja: ao "incluir na rota", se já existir uma parada `TRANSFER_PICKUP` da mesma loja, **acrescenta o transferId** nela em vez de criar outra.
 
-### 3.4 Prova de coleta (onde guardar)
-Opção recomendada: **campos na `Transfer`** — `collectPhotoUrl String?`, `collectPhotoPath String?`, `collectedAt DateTime?`. (Simples; uma coleta = uma foto.)
-- Storage: `uploadTransferCollectPhoto(transferId, …)` (mirror de `uploadRouteStartPhoto`), path `transfer_{id}/COLLECT_{ts}.{ext}`.
+## 6. App do motorista — coletar com checkbox + foto
+- A rota mostra a parada **"Coleta · loja X · N transferências"**.
+- Tela de coleta: lista as transferências daquela parada com **checkbox** (motorista marca as que está levando) + **uma foto** (ou foto por transferência — ver decisão) → `POST /api/driver/coletas/...`:
+  - sobe a foto; marca as transferências selecionadas `APPROVED → IN_TRANSIT`; grava o comprovante.
+- Foto obrigatória (interruptor `REQUIRE_TRANSFER_COLLECT_PHOTO`, default true).
 
-### 3.5 Foto obrigatória? (interruptor)
-`REQUIRE_TRANSFER_COLLECT_PHOTO` no `SystemConfig` (mesmo padrão dos outros). Começar **obrigatória** (a coleta precisa da foto pra avançar) — confirmar com o Alberto.
-
----
-
-## 4. Mudanças de schema (UMA migration consolidada, ao final)
-- `Transfer`: `collectPhotoUrl String?`, `collectPhotoPath String?`, `collectedAt DateTime?`.
-- (RouteSequenceEntry é JSON — sem schema.)
-- Aplicar via SQL idempotente + `scripts/apply-migration.mjs` (regra de dev: nada de `prisma migrate` parcial).
-
----
-
-## 5. Decisões em aberto (precisam do Alberto antes do plano detalhado)
-1. **Onde a Jane inclui a coleta:** na `/transferencias` (aba Para coletar) — confirmar, ou prefere em outro lugar (ex.: dentro da tela da rota em `/roteirizacao/[id]`)?
-2. **Foto da coleta obrigatória** desde já (bloqueia PREPARED→IN_TRANSIT sem foto)? (Recomendado sim.)
-3. **Granularidade:** uma transferência por parada de coleta (recomendado), ou agrupar várias coletas da mesma loja numa parada só?
-4. **Quem mais pode coletar:** só o motorista no app, ou o operador também (fallback)?
+## 7. Remoções (limpeza)
+- Botão **"Despachar"** de transferência (operador) — remover.
+- Ações **"Iniciar preparação"** (PREPARING) e **"Marcar como separada"** (PREPARED) — remover do fluxo de transferência.
+- Revisar a tela `/transferencias` (abas "Para coletar" hoje agrupa APPROVED+PREPARING+PREPARED → passa a ser só APPROVED).
 
 ---
 
-## 6. Esboço de implementação (vira plano detalhado após as decisões)
-1. Schema `Transfer` (3 campos) + migration consolidada.
-2. `lib/route-sequence.ts`: tipo `TRANSFER_PICKUP` + `extractTransferPickupIds`.
-3. `lib/supabase-storage.ts`: `uploadTransferCollectPhoto`.
-4. `services/system-config.service.ts`: `isTransferCollectPhotoRequired`.
-5. Jane: endpoint `incluir-na-rota` + botão na `/transferencias`.
-6. Motorista: render do stop `TRANSFER_PICKUP` na rota + endpoint `coletar` + UI de câmera.
-7. (Opcional) refletir a coleta no manifest/contagem da rota.
+## 8. Mudanças de schema (UMA migration consolidada)
+- `Transfer`: `teNumber String?`, `collectPhotoUrl String?`, `collectPhotoPath String?`, `collectedAt DateTime?`.
+- Data: transferências em PREPARING/PREPARED → APPROVED.
+- `RouteSequenceEntry` é JSON (sem schema).
+- Aplicar via SQL idempotente + `scripts/apply-migration.mjs` (regra: nada de `prisma migrate` parcial).
+
+## 9. Decisões em aberto (confirmar antes do plano detalhado)
+1. **TE em campo novo `teNumber`** (recomendado) vs reusar `nfCitelNumero`. E confirmar: IN_TRANSIT passa a exigir `teNumber` (não a NF Citel) no momento da coleta?
+2. **Recomendação de motorista:** heurística simples no v1 (parada mais próxima da loja de origem) é suficiente, ou quer algo mais elaborado (ETA/desvio real via Google/Spoke)? (Sugiro simples primeiro.)
+3. **Foto na coleta:** uma foto por parada (cobrindo todas as transf. marcadas) ou uma por transferência? (Sugiro uma por parada — mais rápido pro motorista.)
+4. **Transferências existentes** em PREPARING/PREPARED hoje: migrar pra APPROVED (recomendado) — confirmar.
+5. **Aprovar com TE:** a aprovação é feita na tela web `/transferencias` (loja de origem) — confirmar que é lá (e não no app do motorista).
 
 ---
 
-## 7. Riscos
-- Mexer no `sequenceJson` exige cuidado pra não quebrar despacho/roteirização (paradas de coleta NÃO podem virar Dispatch nem entrar em `extractDeliveryRequestIds`). Coberto por `isManualStop`.
-- `updateTransferStatus(PREPARED→IN_TRANSIT)` exige `nfCitelNumero`? Verificar (a validação atual exige nfCitelNumero pra IN_TRANSIT) — pode precisar de ajuste pro fluxo de coleta do motorista.
+## 10. Esboço de implementação (vira plano detalhado após §9)
+1. Schema `Transfer` (teNumber + coleta) + migração de dados PREPARING/PREPARED→APPROVED → **uma migration consolidada**.
+2. State machine Transfer: APPROVED→IN_TRANSIT; ajuste da regra de TE.
+3. Aprovação com TE (endpoint + UI).
+4. `lib/route-sequence.ts`: tipo `TRANSFER_PICKUP` (storeId + transferIds[]) + helpers.
+5. Roteirização: lista unificada (entregas + coletas TE) + botão "Incluir na rota" + recomendação de motorista + append no sequenceJson (agrupando por loja).
+6. App motorista: parada de coleta + checkbox + foto + endpoint que marca IN_TRANSIT.
+7. Storage `uploadTransferCollectPhoto` + flag `REQUIRE_TRANSFER_COLLECT_PHOTO`.
+8. Remoções: botão Despachar + etapas PREPARING/PREPARED na UI.
+
+## 11. Riscos
+- **Mexer na state machine de Transfer + remover estados** afeta fluxos existentes (notificações, StockLedger, `handleTransferReceivedOnRequest`). Mapear todos os usos de PREPARING/PREPARED antes.
+- **`nfCitelNumero` exigido para IN_TRANSIT** (`updateTransferStatus`) — reconciliar com o TE.
+- **Lista unificada na roteirização** (entregas + coletas) mexe em `nova-wave-form.tsx` e na query de elegíveis — cuidar pra coletas NÃO entrarem na "Criar wave" (wave é só entregas via Spoke).
+- **Recomendação de motorista** depende de geo (loja de origem × paradas da rota). Heurística simples no v1.
+- Tamanho: feature grande, multi-subsistema. Executar como plano próprio (provável sessão dedicada).
