@@ -48,7 +48,10 @@ export const ALLOWED_TRANSITIONS: Record<DeliveryRequestStatus, DeliveryRequestS
   [S.NF_EMITIDA]:          [S.NF_VINCULADA, S.AGUARDANDO_NF, S.CANCELLED, S.OCORRENCIA],
   [S.NF_VINCULADA]:        [S.PRONTO_ROTEIRIZACAO, S.CANCELLED, S.OCORRENCIA],
   // Fase logística
-  [S.PRONTO_ROTEIRIZACAO]: [S.ROTEIRIZADO, S.CANCELLED, S.OCORRENCIA],
+  // DISPATCHED direto: despacho via Lalamove (ou despacho direto) pula a
+  // roteirização interna (ROTEIRIZADO). createDispatch cria a row Dispatch na
+  // mesma transaction antes de transitar, então o gate de DISPATCHED é satisfeito.
+  [S.PRONTO_ROTEIRIZACAO]: [S.ROTEIRIZADO, S.DISPATCHED, S.CANCELLED, S.OCORRENCIA],
   [S.ROTEIRIZADO]:         [S.DISPATCHED, S.PRONTO_ROTEIRIZACAO, S.CANCELLED, S.OCORRENCIA],
   [S.DISPATCHED]:          [S.IN_TRANSIT, S.OCORRENCIA],
   [S.IN_TRANSIT]:          [S.DELIVERED, S.OCORRENCIA],
