@@ -195,6 +195,11 @@ export async function updateTransferStatus(
         estimatedArrival: input.estimatedArrival,
         nfCitelNumero:    input.nfCitelNumero ?? undefined,
         nfCitelEmitidaAt: isNewNf ? now : undefined,
+        // Documento da aprovação (PENDING → APPROVED): TE vai para teNumber.
+        // NF reaproveita nfCitelNumero acima. Só persiste teNumber ao aprovar.
+        teNumber:         input.status === TransferStatus.APPROVED && input.teNumber
+                            ? input.teNumber
+                            : undefined,
         items: input.sentItems
           ? {
               updateMany: input.sentItems.map((si) => ({

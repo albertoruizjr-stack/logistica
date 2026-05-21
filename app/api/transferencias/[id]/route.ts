@@ -17,6 +17,10 @@ const updateStatusSchema = z.object({
   notes: z.string().optional(),
   cancellationReason: z.string().min(10, "Informe o motivo do cancelamento (mín. 10 caracteres)").optional(),
   estimatedArrival: z.string().datetime().optional(),
+  // Documento da aprovação (PENDING → APPROVED): TE (comprovante) ou NF (fiscal).
+  // docNumber é o número do documento. Obrigatório ao aprovar (validado abaixo).
+  docType: z.enum(["TE", "NF"]).optional(),
+  docNumber: z.string().optional(),
   sentItems: z.array(
     z.object({ transferItemId: z.string(), sentQty: z.number() })
   ).optional(),
@@ -204,11 +208,30 @@ export async function PATCH(
       }));
     }
 
+    // Aprovação (PENDING → APPROVED) exige o documento da transferência:
+    // TE (comprovante, não fiscal) OU NF (fiscal). Mapeia TE→teNumber, NF→nfCitelNumero.
+    let approvalDoc: { teNumber?: string; nfCitelNumero?: string } = {};
+    if (parsed.data.status === TransferStatus.APPROVED) {
+      const docType   = parsed.data.docType;
+      const docNumber = parsed.data.docNumber?.trim();
+      if (!docType || !docNumber) {
+        return NextResponse.json(
+          apiError("Informe o documento da transferência (TE ou NF) para aprovar", "DOCUMENT_REQUIRED"),
+          { status: 400 },
+        );
+      }
+      approvalDoc = docType === "TE"
+        ? { teNumber: docNumber }
+        : { nfCitelNumero: docNumber };
+    }
+
     // Demais transições — passa pelo service tradicional
     const updated = await updateTransferStatus(params.id, {
       ...parsed.data,
       changedById:      session.userId,
       estimatedArrival: parsed.data.estimatedArrival ? new Date(parsed.data.estimatedArrival) : undefined,
+      docType:          parsed.data.docType,
+      ...approvalDoc,
     });
 
     // Notificações conforme novo status (gatilhos #2, #4, #6)

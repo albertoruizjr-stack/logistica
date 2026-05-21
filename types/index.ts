@@ -492,6 +492,12 @@ export interface UpdateTransferStatusInput {
   // NF emitida no Citel — OBRIGATÓRIO para acionar citelTakesOver().
   // Sem este campo, qtdComprometida NÃO é liberada mesmo em PREPARING/IN_TRANSIT.
   nfCitelNumero?: string;
+  // Documento informado na APROVAÇÃO (PENDING → APPROVED) pela loja origem.
+  // teNumber  → TE (comprovante, não fiscal). docType="TE".
+  // nfCitelNumero (acima) → NF (fiscal). docType="NF".
+  // O documento é obrigatório para aprovar (validado na API route).
+  teNumber?: string;
+  docType?: "TE" | "NF";
 }
 
 export interface CreateDispatchInput {
