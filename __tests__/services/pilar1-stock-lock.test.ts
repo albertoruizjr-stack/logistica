@@ -499,16 +499,15 @@ describe("4. fluxo completo de transferência", () => {
     expect(depois.version).toBe(antes.version); // nenhuma escrita na origem
   });
 
-  // Fluxo novo: APPROVED → IN_TRANSIT direto (sem PREPARING/PREPARED). A coleta
-  // exige um documento (TE OU NF); sem documento, o serviço bloqueia.
-  it("IN_TRANSIT sem documento (TE/NF) → lança erro com mensagem exata", async () => {
+  // Fluxo novo: APPROVED → IN_TRANSIT direto (sem PREPARING/PREPARED). O documento
+  // (TE/NF) é exigido na AUTORIZAÇÃO; a coleta NÃO trava por falta dele — legadas
+  // (aprovadas no fluxo antigo, sem documento) ainda precisam poder ser coletadas.
+  it("IN_TRANSIT sem documento → permitido (legado; doc é exigido na autorização)", async () => {
     const t = seedTransfer(TransferStatus.APPROVED);
 
-    await expect(
-      updateTransferStatus(t.id, { status: TransferStatus.IN_TRANSIT })
-    ).rejects.toThrow(
-      "Transferência sem documento (TE/NF) — autorize com o documento antes de coletar."
-    );
+    await updateTransferStatus(t.id, { status: TransferStatus.IN_TRANSIT });
+
+    expect(db.transfers.get(t.id)!.status).toBe(TransferStatus.IN_TRANSIT);
   });
 
   // Documento = TE (não fiscal) já gravado na autorização → permite IN_TRANSIT.

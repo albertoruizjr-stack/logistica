@@ -164,18 +164,12 @@ export async function updateTransferStatus(
     include: { items: true, deliveryRequest: true },
   });
 
-  // IN_TRANSIT exige um documento da transferência (TE OU NF), informado na
-  // autorização. O documento pode chegar agora (input) OU já estar gravado na
-  // transferência (current). TE → teNumber, NF → nfCitelNumero.
-  if (input.status === TransferStatus.IN_TRANSIT) {
-    const hasDoc =
-      input.teNumber ?? current.teNumber ?? input.nfCitelNumero ?? current.nfCitelNumero;
-    if (!hasDoc) {
-      throw new Error(
-        "Transferência sem documento (TE/NF) — autorize com o documento antes de coletar."
-      );
-    }
-  }
+  // Documento (TE/NF) é exigido na AUTORIZAÇÃO (transferências novas). A coleta
+  // (IN_TRANSIT) NÃO trava por falta dele: transferências legadas (aprovadas no
+  // fluxo antigo, que capturava a NF só no despacho) não têm documento e ainda
+  // precisam poder ser coletadas. A prova da coleta é a foto. citelTakesOver()
+  // só roda quando há nfCitelNumero (TE/sem-doc não libera qtdComprometida até o
+  // recebimento) — comportamento aceitável.
 
   validateStatusTransition(current.status, input.status);
 
