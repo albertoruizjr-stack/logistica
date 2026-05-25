@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, Play, AlertTriangle, CheckCircle2, Truck, PackageCheck, X, ArrowRight } from "lucide-react";
+import { Loader2, Play, AlertTriangle, CheckCircle2, Truck, PackageCheck, X, ArrowRight, Zap, Calendar, Store } from "lucide-react";
 import { cn, calculateHaversineDistance } from "@/lib/utils";
 import { formatVolumeBreakdown } from "@/services/citel-stock.service";
 import { LalamoveCallModal } from "./lalamove-call-modal";
@@ -17,6 +17,12 @@ interface EligibleRequest {
   totalWeightKg:    number | null;
   totalLatas:       number | null;
   volumeBreakdown:  Record<string, number> | null;
+  // selos de classificação (calculados no server)
+  appUrgent:          boolean;
+  todayUrgent:        boolean;
+  scheduledDateLabel: string | null;
+  isFutureScheduled:  boolean;
+  originStoreCode:    string | null;
 }
 
 interface AvailableDriver {
@@ -117,6 +123,14 @@ export default function NovaWaveForm({
   }, 0);
   const exceedsCapacity = drvIds.size > 0 && totalWeightKg > totalCapacityKg;
   const excessKg = exceedsCapacity ? Math.round((totalWeightKg - totalCapacityKg) * 10) / 10 : 0;
+
+  // Entregas de hoje (não-futuras) — base do "Selecionar de hoje".
+  const todayIds = eligibleRequests.filter((r) => !r.isFutureScheduled).map((r) => r.id);
+  const allTodaySelected = todayIds.length > 0 && todayIds.every((id) => reqIds.has(id));
+  const urgentCount = eligibleRequests.filter(
+    (r) => (r.appUrgent || r.todayUrgent) && !r.isFutureScheduled,
+  ).length;
+  const scheduledCount = eligibleRequests.filter((r) => r.isFutureScheduled).length;
 
   // Polling: enquanto progress não estiver terminal, chamar /advance a cada 3s
   useEffect(() => {
@@ -357,18 +371,16 @@ export default function NovaWaveForm({
         <label className="flex items-center justify-between mb-2">
           <span className="text-xs font-semibold text-gray-700">
             Entregas elegíveis ({reqIds.size} de {eligibleRequests.length})
+            {urgentCount > 0 && <span className="text-red-600"> · {urgentCount} urgentes</span>}
+            {scheduledCount > 0 && <span className="text-violet-600"> · {scheduledCount} agendadas</span>}
           </span>
-          {eligibleRequests.length > 0 && (
+          {todayIds.length > 0 && (
             <button
               type="button"
-              onClick={() => setReqIds(
-                reqIds.size === eligibleRequests.length
-                  ? new Set()
-                  : new Set(eligibleRequests.map((r) => r.id)),
-              )}
+              onClick={() => setReqIds(allTodaySelected ? new Set() : new Set(todayIds))}
               className="text-[11px] text-orange-600 hover:underline font-medium"
             >
-              {reqIds.size === eligibleRequests.length ? "Limpar" : "Selecionar todas"}
+              {allTodaySelected ? "Limpar" : `Selecionar de hoje (${todayIds.length})`}
             </button>
           )}
         </label>
@@ -402,12 +414,17 @@ export default function NovaWaveForm({
                     {isSelected && <CheckCircle2 className="w-3 h-3 text-white" />}
                   </span>
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium text-gray-900 truncate">
-                      {r.invoiceNumber
-                        ? `NF ${r.invoiceNumber}`
-                        : r.orderNumber
-                          ? `PD ${r.orderNumber}`
-                          : `#${r.id.slice(-6)}`} · {r.customerName}
+                    <p className="text-sm font-medium text-gray-900 truncate flex items-center gap-1.5">
+                      <span className="flex-shrink-0">
+                        {r.invoiceNumber
+                          ? `NF ${r.invoiceNumber}`
+                          : r.orderNumber
+                            ? `PD ${r.orderNumber}`
+                            : `#${r.id.slice(-6)}`}
+                      </span>
+                      <DeliveryBadges r={r} />
+                      <span className="text-gray-400 font-normal flex-shrink-0">·</span>
+                      <span className="truncate">{r.customerName}</span>
                     </p>
                     <p className="text-xs text-gray-500 truncate">
                       {r.deliveryAddress}{r.deliveryCity && ` — ${r.deliveryCity}`}
@@ -436,6 +453,14 @@ export default function NovaWaveForm({
               );
             })}
           </div>
+        )}
+        {eligibleRequests.length > 0 && (
+          <p className="text-[10px] text-gray-400 mt-1.5 flex items-center gap-2.5 flex-wrap">
+            <span className="inline-flex items-center gap-0.5"><Zap className="w-2.5 h-2.5 text-amber-500" /> App (Lalamove/99)</span>
+            <span className="inline-flex items-center gap-0.5"><span className="w-1.5 h-1.5 rounded-full bg-red-500" /> Hoje (frota)</span>
+            <span className="inline-flex items-center gap-0.5"><Calendar className="w-2.5 h-2.5 text-violet-500" /> agendada</span>
+            <span className="inline-flex items-center gap-0.5"><Store className="w-2.5 h-2.5 text-sky-500" /> outra loja</span>
+          </p>
         )}
       </div>
 
@@ -834,5 +859,33 @@ function WaveProgressPanel({ progress, onReset }: { progress: WaveProgress; onRe
         </button>
       </div>
     </div>
+  );
+}
+
+// Selos de classificação exibidos na linha de cada entrega elegível.
+function DeliveryBadges({ r }: { r: EligibleRequest }) {
+  return (
+    <>
+      {r.appUrgent && (
+        <span className="inline-flex items-center gap-0.5 text-[10px] font-bold text-amber-700 bg-amber-100 rounded px-1.5 py-0.5 flex-shrink-0">
+          <Zap className="w-2.5 h-2.5" /> App
+        </span>
+      )}
+      {r.todayUrgent && (
+        <span className="inline-flex items-center gap-0.5 text-[10px] font-bold text-red-700 bg-red-100 rounded px-1.5 py-0.5 flex-shrink-0">
+          <span className="w-1.5 h-1.5 rounded-full bg-red-500" /> Hoje
+        </span>
+      )}
+      {r.scheduledDateLabel && (
+        <span className="inline-flex items-center gap-0.5 text-[10px] font-bold text-violet-700 bg-violet-100 rounded px-1.5 py-0.5 flex-shrink-0">
+          <Calendar className="w-2.5 h-2.5" /> {r.scheduledDateLabel}
+        </span>
+      )}
+      {r.originStoreCode && (
+        <span className="inline-flex items-center gap-0.5 text-[10px] font-bold text-sky-700 bg-sky-100 rounded px-1.5 py-0.5 flex-shrink-0">
+          <Store className="w-2.5 h-2.5" /> {r.originStoreCode}
+        </span>
+      )}
+    </>
   );
 }
