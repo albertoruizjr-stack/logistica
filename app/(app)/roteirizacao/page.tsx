@@ -4,13 +4,14 @@ import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { listWaves } from "@/services/routing-wave.service";
 import { PageHeader, EmptyState } from "@/components/ui";
-import { Map, Truck, Clock, AlertTriangle, CheckCircle2 } from "lucide-react";
+import { Map as MapIcon, Truck, Clock, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { cn, formatRelativeTime } from "@/lib/utils";
 import NovaWaveForm from "./_components/nova-wave-form";
 import SyncDriversButton from "./_components/sync-drivers-button";
 import DeleteWaveButton from "./_components/delete-wave-button";
 import { VEHICLE_CAPACITY } from "@/services/citel-stock.service";
 import { type RouteSequenceEntry, extractTransferIds } from "@/lib/route-sequence";
+import { classifyEligibleDelivery, sortEligibleDeliveries } from "@/lib/eligible-delivery";
 
 const ALLOWED_ROLES = ["ADMIN", "OPERATOR", "LOGISTICS_OPERATOR"];
 
@@ -52,7 +53,7 @@ export default async function RoteirizacaoPage() {
   const endOfToday = new Date();
   endOfToday.setHours(23, 59, 59, 999);
 
-  const [eligibleRequests, availableDrivers, recentWaves, rawTransfers, activeRoutes] = await Promise.all([
+  const [eligibleRequests, availableDrivers, recentWaves, rawTransfers, activeRoutes, allStores] = await Promise.all([
     prisma.deliveryRequest.findMany({
       where: {
         status: "PRONTO_ROTEIRIZACAO",
@@ -68,6 +69,13 @@ export default async function RoteirizacaoPage() {
         totalWeightKg:   true,
         totalLatas:      true,
         volumeBreakdown: true,
+        // novos: base dos selos de urgência / agendamento / loja de origem
+        slaType:         true,
+        scheduledFor:    true,
+        dispatchStoreId: true,
+        entregaPeloCD:   true,
+        storeId:         true,
+        createdAt:       true,
       },
       orderBy: { createdAt: "asc" },
       take: 200,
@@ -118,7 +126,21 @@ export default async function RoteirizacaoPage() {
       },
       orderBy: { createdAt: "asc" },
     }),
+    // Lojas ativas — mapa id→code para resolver a loja de origem das entregas.
+    prisma.store.findMany({
+      where:  { active: true },
+      select: { id: true, code: true },
+    }),
   ]);
+
+  // Enriquece e ordena as entregas elegíveis (selos + prioridade).
+  const storeCodeById = new Map(allStores.map((s) => [s.id, s.code]));
+  const cdStoreId = allStores.find((s) => s.code === "132")?.id ?? null;
+  const classifyCtx = { cdCode: "132", cdStoreId, storeCodeById, now: new Date() };
+
+  const eligibleEnriched = sortEligibleDeliveries(
+    eligibleRequests.map((r) => ({ ...r, ...classifyEligibleDelivery(r, classifyCtx) })),
+  );
 
   // Conjunto de transferências já presentes em alguma rota ativa (TRANSFER_PICKUP).
   const transferIdsOnRoutes = new Set<string>();
@@ -206,14 +228,26 @@ export default async function RoteirizacaoPage() {
         {/* Form de nova wave (2/3) */}
         <div className="col-span-2 bg-white rounded-xl border border-gray-200 p-5">
           <h2 className="text-base font-bold text-gray-900 mb-4 flex items-center gap-2">
-            <Map className="w-4 h-4 text-orange-500" />
+            <MapIcon className="w-4 h-4 text-orange-500" />
             Nova wave
           </h2>
           <NovaWaveForm
             suggestedName={suggestedName}
-            eligibleRequests={eligibleRequests.map((r) => ({
-              ...r,
-              volumeBreakdown: (r.volumeBreakdown as Record<string, number> | null) ?? null,
+            eligibleRequests={eligibleEnriched.map((r) => ({
+              id:                 r.id,
+              orderNumber:        r.orderNumber,
+              invoiceNumber:      r.invoiceNumber,
+              customerName:       r.customerName,
+              deliveryAddress:    r.deliveryAddress,
+              deliveryCity:       r.deliveryCity,
+              totalWeightKg:      r.totalWeightKg,
+              totalLatas:         r.totalLatas,
+              volumeBreakdown:    (r.volumeBreakdown as Record<string, number> | null) ?? null,
+              appUrgent:          r.appUrgent,
+              todayUrgent:        r.todayUrgent,
+              scheduledDateLabel: r.scheduledDateLabel,
+              isFutureScheduled:  r.isFutureScheduled,
+              originStoreCode:    r.originStoreCode,
             }))}
             availableDrivers={availableDrivers.map((d) => ({
               id:          d.id,
@@ -238,7 +272,7 @@ export default async function RoteirizacaoPage() {
 
           {recentWaves.length === 0 ? (
             <EmptyState
-              icon={Map}
+              icon={MapIcon}
               title="Nenhuma wave criada ainda"
               description="A primeira wave aparece aqui depois de criada."
             />
