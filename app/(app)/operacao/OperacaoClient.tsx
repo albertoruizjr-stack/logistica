@@ -9,6 +9,7 @@ import { WorkQueueColumn }     from "@/components/operacao/WorkQueueColumn";
 import { ActionModal }         from "@/components/operacao/ActionModal";
 import { MarkDeliveredModal }  from "@/components/operacao/MarkDeliveredModal";
 import { ClaimConflictModal }  from "@/components/operacao/ClaimConflictModal";
+import { CorrigirPedidoModal } from "@/components/operacao/CorrigirPedidoModal";
 import { QueueFilterBar }      from "@/components/operacao/QueueFilterBar";
 import type {
   OperationalQueuePayload,
@@ -20,13 +21,14 @@ import type {
 import type { ClaimInfo } from "@/services/claim.service";
 
 interface OperacaoClientProps {
-  initial:       OperationalQueuePayload;
-  currentUserId: string;
+  initial:         OperationalQueuePayload;
+  currentUserId:   string;
   currentUserName: string;
-  requirePhoto:  boolean;
+  currentUserRole: string;
+  requirePhoto:    boolean;
 }
 
-export function OperacaoClient({ initial, currentUserId, currentUserName, requirePhoto }: OperacaoClientProps) {
+export function OperacaoClient({ initial, currentUserId, currentUserName, currentUserRole, requirePhoto }: OperacaoClientProps) {
   const { data, loading, error, refetch } = useOperationalQueue(initial);
 
   // Estado do modal de ação
@@ -34,6 +36,8 @@ export function OperacaoClient({ initial, currentUserId, currentUserName, requir
   const [selectedAction, setSelectedAction] = useState<ActionDefinition | null>(null);
   // Estado do modal de conflito
   const [conflictClaim,  setConflictClaim]  = useState<ClaimInfo | null>(null);
+  // Estado do modal de correção de pedido
+  const [correctingCard, setCorrectingCard] = useState<OperationalCard | null>(null);
   // Estado do filtro
   const [filterMode,     setFilterMode]     = useState<FilterMode>("all");
 
@@ -211,7 +215,9 @@ export function OperacaoClient({ initial, currentUserId, currentUserName, requir
               key={column.id}
               column={column}
               currentUserId={currentUserId}
+              currentUserRole={currentUserRole}
               onAction={openModal}
+              onCorrigirPedido={setCorrectingCard}
             />
           ))}
         </div>
@@ -241,6 +247,15 @@ export function OperacaoClient({ initial, currentUserId, currentUserName, requir
         <ClaimConflictModal
           claim={conflictClaim}
           onClose={() => setConflictClaim(null)}
+        />
+      )}
+
+      {/* Modal de correção do número do pedido */}
+      {correctingCard && (
+        <CorrigirPedidoModal
+          card={correctingCard}
+          onClose={() => setCorrectingCard(null)}
+          onSuccess={refetch}
         />
       )}
     </div>

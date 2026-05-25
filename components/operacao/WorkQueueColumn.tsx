@@ -4,9 +4,11 @@ import { DeliveryCard } from "./DeliveryCard";
 import type { OperationalCard, OperationalColumn, ActionDefinition } from "./types";
 
 interface WorkQueueColumnProps {
-  column:        OperationalColumn;
-  currentUserId: string;
-  onAction:      (card: OperationalCard, action: ActionDefinition) => void;
+  column:           OperationalColumn;
+  currentUserId:    string;
+  currentUserRole:  string;
+  onAction:         (card: OperationalCard, action: ActionDefinition) => void;
+  onCorrigirPedido: (card: OperationalCard) => void;
 }
 
 const COLUMN_ACCENT: Record<string, string> = {
@@ -19,7 +21,7 @@ const COLUMN_ACCENT: Record<string, string> = {
   ocorrencia:    "#EF4444",
 };
 
-export function WorkQueueColumn({ column, currentUserId, onAction }: WorkQueueColumnProps) {
+export function WorkQueueColumn({ column, currentUserId, currentUserRole, onAction, onCorrigirPedido }: WorkQueueColumnProps) {
   const accent = COLUMN_ACCENT[column.id] ?? "#6B7280";
 
   return (
@@ -67,7 +69,9 @@ export function WorkQueueColumn({ column, currentUserId, onAction }: WorkQueueCo
               key={card.id}
               card={card}
               currentUserId={currentUserId}
+              currentUserRole={currentUserRole}
               onAction={onAction}
+              onCorrigirPedido={onCorrigirPedido}
             />
           ))
         )}

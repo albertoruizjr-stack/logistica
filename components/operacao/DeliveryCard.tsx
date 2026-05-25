@@ -1,13 +1,15 @@
 "use client";
 
-import { Zap, ArrowLeftRight, AlertTriangle, Clock, MapPin, Lock, Unlock } from "lucide-react";
+import { Zap, ArrowLeftRight, AlertTriangle, Clock, MapPin, Lock, Unlock, Pencil } from "lucide-react";
 import type { OperationalCard, ActionDefinition } from "./types";
 import { ACTIONS_BY_STATUS } from "./actions";
 
 interface DeliveryCardProps {
   card:        OperationalCard;
   currentUserId: string;
+  currentUserRole: string;
   onAction:    (card: OperationalCard, action: ActionDefinition) => void;
+  onCorrigirPedido: (card: OperationalCard) => void;
 }
 
 const PRIORITY_BORDER: Record<string, string> = {
@@ -45,7 +47,7 @@ function formatRef(card: OperationalCard) {
   return `#${card.id.slice(-6).toUpperCase()}`;
 }
 
-export function DeliveryCard({ card, currentUserId, onAction }: DeliveryCardProps) {
+export function DeliveryCard({ card, currentUserId, currentUserRole, onAction, onCorrigirPedido }: DeliveryCardProps) {
   const borderColor    = PRIORITY_BORDER[card.priority] ?? PRIORITY_BORDER.LOW;
   const isCritical     = card.priority === "CRITICAL";
   const isExpress      = card.slaType === "EXPRESS";
@@ -53,6 +55,9 @@ export function DeliveryCard({ card, currentUserId, onAction }: DeliveryCardProp
   const isLockedByMe   = card.lockedBy === currentUserId && card.lockMinutesLeft !== null;
   const isLockedByOther = card.lockedBy && card.lockedBy !== currentUserId && card.lockMinutesLeft !== null;
   const actions        = ACTIONS_BY_STATUS[card.status] ?? [];
+  const OPERATOR_ROLES = ["ADMIN", "OPERATOR", "LOGISTICS_OPERATOR", "STOCK_OPERATOR", "STORE_LEADER"];
+  const canCorrigir = card.status === "PENDING" &&
+    (OPERATOR_ROLES.includes(currentUserRole) || card.sellerId === currentUserId);
   const primaryActions = actions.filter((a) => a.variant === "primary" || a.variant === "warning");
   const dangerActions  = actions.filter((a) => a.variant === "danger");
 
@@ -77,6 +82,16 @@ export function DeliveryCard({ card, currentUserId, onAction }: DeliveryCardProp
         >
           {formatRef(card)}
         </span>
+        {canCorrigir && (
+          <button
+            onClick={() => onCorrigirPedido(card)}
+            title="Corrigir número do pedido"
+            className="p-0.5 rounded hover:bg-white/10 transition-colors"
+            style={{ color: "#6B7280" }}
+          >
+            <Pencil className="w-3 h-3" />
+          </button>
+        )}
 
         {isExpress && (
           <span

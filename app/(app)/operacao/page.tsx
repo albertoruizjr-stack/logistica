@@ -25,6 +25,7 @@ export default async function OperacaoPage() {
       initial={queue}
       currentUserId={session.userId}
       currentUserName={session.name}
+      currentUserRole={session.role}
       requirePhoto={requirePhoto}
     />
   );
