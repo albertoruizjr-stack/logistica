@@ -8,41 +8,8 @@ import {
   headerCache, itemsCache, stockCache,
   headerKey, itemsKey, stockKey,
 } from "@/services/citel-cache.service";
-import type { ERPOrderValidationStatus, CitelEndereco, DeliveryAddressSource } from "@/types/stock";
-
-// ─── Classificação de status do pedido ──────────────────────────────────
-// Mapeia o status bruto da Citel para nosso enum de validação.
-// Padrões regex para cobrir variações do Autcom (CANCELADO, CANCELAMENTO, etc.)
-
-const STATUS_RULES: Array<{ pattern: RegExp; result: ERPOrderValidationStatus }> = [
-  { pattern: /CANCEL/i,                   result: "CANCELLED"         },
-  { pattern: /BLOQ/i,                     result: "BLOCKED"           },
-  { pattern: /AGUARDANDO.*(APRO|LIBERA)/i, result: "APPROVAL_PENDING" },
-  { pattern: /FATURA|NF.EMIT|ENCERR|CONCLU/i, result: "ALREADY_FULFILLED" },
-];
-
-const BLOCKED_MESSAGES: Record<string, string> = {
-  CANCELLED:        "Pedido cancelado — não é possível criar entrega para pedidos cancelados.",
-  BLOCKED:          "Pedido bloqueado — entre em contato com a equipe de crédito antes de prosseguir.",
-  APPROVAL_PENDING: "Pedido aguardando aprovação — não pode ser despachado até aprovação do comercial.",
-  ALREADY_FULFILLED: "Pedido já faturado ou encerrado — a NF já foi emitida para este pedido.",
-};
-
-function classifyOrderStatus(rawStatus: string | null): ERPOrderValidationStatus {
-  if (!rawStatus) return "VALID";
-  for (const { pattern, result } of STATUS_RULES) {
-    if (pattern.test(rawStatus)) return result;
-  }
-  return "VALID";
-}
-
-// ─── Formatação de endereço ──────────────────────────────────────────────
-
-function formatEndereco(e: CitelEndereco): string {
-  return [e.logradouro, e.numero, e.complemento, e.bairro, e.cidade, e.estado]
-    .filter(Boolean)
-    .join(", ");
-}
+import type { CitelEndereco, DeliveryAddressSource } from "@/types/stock";
+import { classifyOrderStatus, BLOCKED_MESSAGES, formatEndereco } from "@/lib/erp-order-status";
 
 function enderecosDiferentes(a: CitelEndereco, b: CitelEndereco | null): boolean {
   if (!b) return false;
