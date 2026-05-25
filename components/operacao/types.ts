@@ -22,6 +22,7 @@ export interface OperationalCard {
   storeCode: string;
   storeName: string;
   sellerName: string;
+  sellerId: string;
   // Separação
   separatedBy: string | null;
   separatedAt: string | null; // ISO string

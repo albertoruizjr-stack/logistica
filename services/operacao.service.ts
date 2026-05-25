@@ -225,6 +225,7 @@ export async function getOperationalQueue(role?: string): Promise<OperationalQue
       storeCode:        r.store.code,
       storeName:        r.store.name,
       sellerName:       r.seller.name,
+      sellerId:         r.sellerId,
       separatedBy:      r.separatedBy,
       separatedAt:      r.separatedAt?.toISOString() ?? null,
       occurrenceType:   r.occurrenceType,
