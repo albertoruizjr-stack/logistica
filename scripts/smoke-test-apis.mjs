@@ -131,7 +131,7 @@ async function testLalamove() {
     const path = "/v3/quotations";
     const body = JSON.stringify({
       data: {
-        serviceType: "MOTORCYCLE",
+        serviceType: "LALAPRO",
         language: "pt_BR",
         stops: [
           { coordinates: { lat: "-23.561", lng: "-46.656" }, address: "Avenida Paulista, 1000, SP" },
@@ -146,7 +146,9 @@ async function testLalamove() {
       method: "POST",
       headers: {
         "Content-Type": "application/json; charset=utf-8",
-        Authorization: `hmac id="${key}", ts="${ts}", sign="${sig}"`,
+        // Formato OFICIAL Lalamove v3: hmac <KEY>:<TS>:<SIGN> (separador ":").
+        // O formato antigo `hmac id="x", ts="y", sign="z"` é rejeitado pelo gateway (502).
+        Authorization: `hmac ${key}:${ts}:${sig}`,
         Market: market,
         "Request-ID": crypto.randomUUID(),
       },
