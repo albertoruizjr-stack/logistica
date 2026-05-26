@@ -248,6 +248,7 @@ vi.mock("@/services/erp.service",   () => ({ fetchStockByProduct: vi.fn() }));
 import {
   indicateOrigin,
   approveTransfer,
+  rejectTransferAtOrigin,
 } from "@/services/transferencia.service";
 
 const { db, resetDb, seedLedger, seedTransfer, citel } = mocks;
@@ -408,6 +409,48 @@ describe("Task 5 — approveTransfer", () => {
     const t = seedTransfer(TransferStatus.PENDING, { fromStoreId: null });
     await expect(
       approveTransfer(t.id, { teNumber: "TE-1" }, "user-067"),
+    ).rejects.toThrow(/AWAITING_APPROVAL/);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Task 6 — rejectTransferAtOrigin (AWAITING_APPROVAL → PENDING)
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe("Task 6 — rejectTransferAtOrigin", () => {
+  beforeEach(() => {
+    resetDb();
+    vi.clearAllMocks();
+    citel.isCitelConfigured.mockReturnValue(true);
+    citel.getSaldoDisponivel.mockResolvedValue({ saldoDisponivel: 100, saldoFisico: 100 });
+  });
+
+  it("AWAITING_APPROVAL → PENDING libera commitStock e limpa fromStoreId/originIndicated*", async () => {
+    const t = await setupTransferInAwaitingApproval();
+    expect(db.ledgers.get("store-a_TINT-001")!.qtdComprometida).toBe(3);
+
+    const updated = await rejectTransferAtOrigin(t.id, "Sem estoque físico real", "user-067");
+
+    expect(updated.status).toBe(TransferStatus.PENDING);
+    expect(updated.fromStoreId).toBeNull();
+    expect(updated.originIndicatedAt).toBeNull();
+    expect(updated.originIndicatedById).toBeNull();
+
+    // qtdComprometida liberada na origem que foi indicada
+    expect(db.ledgers.get("store-a_TINT-001")!.qtdComprometida).toBe(0);
+
+    // History registra o motivo
+    const history = db.histories.find(
+      (h: any) => h.transferId === t.id && h.toStatus === TransferStatus.PENDING,
+    );
+    expect(history).toBeDefined();
+    expect((history as any).notes).toMatch(/Sem estoque físico real/);
+  });
+
+  it("rejeita se status atual não é AWAITING_APPROVAL", async () => {
+    const t = seedTransfer(TransferStatus.PENDING, { fromStoreId: null });
+    await expect(
+      rejectTransferAtOrigin(t.id, "motivo", "user-067"),
     ).rejects.toThrow(/AWAITING_APPROVAL/);
   });
 });

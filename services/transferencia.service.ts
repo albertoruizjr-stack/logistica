@@ -336,6 +336,71 @@ export async function approveTransfer(
 }
 
 // ──────────────────────────────────────────────
+// rejectTransferAtOrigin — etapa 2 → 1 (AWAITING_APPROVAL → PENDING)
+//
+// Líder da origem recusa. Libera commitStock na origem que foi indicada e
+// volta a Transfer para PENDING (com fromStoreId=null para o destino indicar
+// outra origem).
+// ──────────────────────────────────────────────
+
+export async function rejectTransferAtOrigin(
+  transferId: string,
+  reason: string,
+  rejectedById: string,
+) {
+  const current = await prisma.transfer.findUniqueOrThrow({
+    where: { id: transferId },
+    include: { items: true },
+  });
+  if (current.status !== TransferStatus.AWAITING_APPROVAL) {
+    throw new Error(
+      `Rejeição só é válida em AWAITING_APPROVAL (atual: ${current.status})`,
+    );
+  }
+  if (!current.fromStoreId) {
+    throw new Error("Transfer sem fromStoreId — estado inconsistente");
+  }
+
+  const previousFromStoreId = current.fromStoreId;
+
+  const updated = await prisma.$transaction(async (tx) => {
+    const t = await tx.transfer.update({
+      where: { id: transferId },
+      data: {
+        status:              TransferStatus.PENDING,
+        fromStoreId:         null,
+        originIndicatedAt:   null,
+        originIndicatedById: null,
+      },
+      include: { items: true, toStore: true },
+    });
+    await tx.transferHistory.create({
+      data: {
+        transferId,
+        fromStatus:  TransferStatus.AWAITING_APPROVAL,
+        toStatus:    TransferStatus.PENDING,
+        changedById: rejectedById,
+        notes:       `Recusada pela origem: ${reason}`,
+      },
+    });
+    return t;
+  });
+
+  // Libera commitStock na origem que foi indicada
+  for (const item of current.items) {
+    await releaseStock({
+      storeId:     previousFromStoreId,
+      productCode: item.productCode,
+      qty:         item.quantity,
+      transferId,
+      operatorId:  rejectedById,
+    });
+  }
+
+  return updated;
+}
+
+// ──────────────────────────────────────────────
 // PROGRESSÃO DE STATUS
 // ──────────────────────────────────────────────
 
