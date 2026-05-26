@@ -240,6 +240,102 @@ export async function indicateOrigin(
 }
 
 // ──────────────────────────────────────────────
+// approveTransfer — etapa 2 → 3 (AWAITING_APPROVAL → READY_TO_COLLECT)
+//
+// Líder da loja origem aprova informando TE (não fiscal) OU NF (fiscal).
+// markInTransit no destino sempre. Se NF, citelTakesOver na origem libera
+// qtdComprometida (Citel passa a controlar). TE/NF persistem no item único.
+// ──────────────────────────────────────────────
+
+export async function approveTransfer(
+  transferId: string,
+  input: { teNumber?: string; nfCitelNumero?: string },
+  approverId: string,
+) {
+  const hasTE = !!input.teNumber;
+  const hasNF = !!input.nfCitelNumero;
+  if (hasTE === hasNF) {
+    throw new Error("Informe exatamente um documento: TE ou NF");
+  }
+
+  const current = await prisma.transfer.findUniqueOrThrow({
+    where: { id: transferId },
+    include: { items: true },
+  });
+  if (current.status !== TransferStatus.AWAITING_APPROVAL) {
+    throw new Error(
+      `Aprovação só é válida em AWAITING_APPROVAL (atual: ${current.status})`,
+    );
+  }
+  if (!current.fromStoreId) {
+    throw new Error("Transfer sem fromStoreId — estado inconsistente");
+  }
+  if (current.items.length !== 1) {
+    throw new Error(`Transfer deve ter 1 item (encontrados ${current.items.length})`);
+  }
+  const item = current.items[0];
+
+  const now = new Date();
+  const updated = await prisma.$transaction(async (tx) => {
+    await tx.transferItem.update({
+      where: { id: item.id },
+      data: {
+        teNumber:         hasTE ? input.teNumber : null,
+        nfCitelNumero:    hasNF ? input.nfCitelNumero : null,
+        nfCitelEmitidaAt: hasNF ? now : null,
+      },
+    });
+    const t = await tx.transfer.update({
+      where: { id: transferId },
+      data: {
+        status:           TransferStatus.READY_TO_COLLECT,
+        approvedAt:       now,
+        approvedById:     approverId,
+        // Duplicado na Transfer pra compat com telas legadas
+        teNumber:         hasTE ? input.teNumber : undefined,
+        nfCitelNumero:    hasNF ? input.nfCitelNumero : undefined,
+        nfCitelEmitidaAt: hasNF ? now : undefined,
+      },
+      include: { items: true, fromStore: true, toStore: true },
+    });
+    await tx.transferHistory.create({
+      data: {
+        transferId,
+        fromStatus:  TransferStatus.AWAITING_APPROVAL,
+        toStatus:    TransferStatus.READY_TO_COLLECT,
+        changedById: approverId,
+        notes:       hasTE
+          ? `Aprovada com TE ${input.teNumber}`
+          : `Aprovada com NF ${input.nfCitelNumero}`,
+      },
+    });
+    return t;
+  });
+
+  // markInTransit no destino (qtdEmTransito ++) — sempre
+  await markInTransit({
+    toStoreId:   current.toStoreId,
+    productCode: item.productCode,
+    productName: item.productName,
+    qty:         item.quantity,
+    transferId,
+  });
+
+  // Se NF, citelTakesOver (libera qtdComprometida na origem)
+  if (hasNF) {
+    await citelTakesOver({
+      storeId:     current.fromStoreId,
+      productCode: item.productCode,
+      qty:         item.quantity,
+      transferId,
+      operatorId:  approverId,
+    });
+  }
+
+  return updated;
+}
+
+// ──────────────────────────────────────────────
 // PROGRESSÃO DE STATUS
 // ──────────────────────────────────────────────
 

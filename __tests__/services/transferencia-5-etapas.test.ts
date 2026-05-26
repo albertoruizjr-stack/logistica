@@ -245,12 +245,34 @@ vi.mock("@/lib/prisma",         () => ({ prisma: mocks.prisma }));
 vi.mock("@/services/citel.service", () => mocks.citel);
 vi.mock("@/services/erp.service",   () => ({ fetchStockByProduct: vi.fn() }));
 
-import { indicateOrigin } from "@/services/transferencia.service";
+import {
+  indicateOrigin,
+  approveTransfer,
+} from "@/services/transferencia.service";
 
 const { db, resetDb, seedLedger, seedTransfer, citel } = mocks;
 
 // Sinaliza ao TS que TransferPriority é usado no enum-only import acima.
 void TransferPriority;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers compartilhados entre tasks 5-9
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Cria uma Transfer em AWAITING_APPROVAL via PENDING + indicateOrigin.
+ * Default: store-b destino, store-a origem indicada, 3 unidades de TINT-001.
+ */
+async function setupTransferInAwaitingApproval(
+  overrides: { fromStoreId?: string; toStoreId?: string } = {},
+) {
+  const fromStoreId = overrides.fromStoreId ?? "store-a";
+  const toStoreId   = overrides.toStoreId   ?? "store-b";
+  seedLedger(fromStoreId, "TINT-001", { qtdFisica: 10, qtdComprometida: 0 });
+  const t = seedTransfer(TransferStatus.PENDING, { fromStoreId: null, toStoreId });
+  await indicateOrigin(t.id, fromStoreId, "user-132");
+  return db.transfers.get(t.id)!;
+}
 
 // ═════════════════════════════════════════════════════════════════════════════
 // Task 4 — indicateOrigin (PENDING → AWAITING_APPROVAL)
@@ -317,5 +339,75 @@ describe("Task 4 — indicateOrigin", () => {
 
     await expect(indicateOrigin(t.id, "store-a", "user-132"))
       .rejects.toThrow(/destino/i);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Task 5 — approveTransfer (AWAITING_APPROVAL → READY_TO_COLLECT)
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe("Task 5 — approveTransfer", () => {
+  beforeEach(() => {
+    resetDb();
+    vi.clearAllMocks();
+    citel.isCitelConfigured.mockReturnValue(true);
+    citel.getSaldoDisponivel.mockResolvedValue({ saldoDisponivel: 100, saldoFisico: 100 });
+  });
+
+  it("com TE: AWAITING_APPROVAL → READY_TO_COLLECT, persiste TE no item, qtdEmTransito++", async () => {
+    const t = await setupTransferInAwaitingApproval();
+
+    const updated = await approveTransfer(t.id, { teNumber: "TE-12345" }, "user-067");
+
+    expect(updated.status).toBe(TransferStatus.READY_TO_COLLECT);
+    expect(updated.approvedAt).toBeInstanceOf(Date);
+    expect(updated.approvedById).toBe("user-067");
+
+    const tf = db.transfers.get(t.id)!;
+    expect(tf.items[0].teNumber).toBe("TE-12345");
+    expect(tf.items[0].nfCitelNumero).toBeNull();
+
+    // qtdEmTransito incrementada no destino
+    const dest = db.ledgers.get("store-b_TINT-001")!;
+    expect(dest.qtdEmTransito).toBe(3);
+
+    // qtdComprometida na origem permanece (TE não dispara citelTakesOver)
+    const origem = db.ledgers.get("store-a_TINT-001")!;
+    expect(origem.qtdComprometida).toBe(3);
+  });
+
+  it("com NF: dispara citelTakesOver (libera qtdComprometida na origem)", async () => {
+    const t = await setupTransferInAwaitingApproval();
+    const before = db.ledgers.get("store-a_TINT-001")!.qtdComprometida;
+    expect(before).toBe(3); // sanidade
+
+    await approveTransfer(t.id, { nfCitelNumero: "NF-99999" }, "user-067");
+
+    const after = db.ledgers.get("store-a_TINT-001")!.qtdComprometida;
+    expect(after).toBe(0); // Citel passa a controlar
+
+    const tf = db.transfers.get(t.id)!;
+    expect(tf.items[0].nfCitelNumero).toBe("NF-99999");
+    expect(tf.items[0].nfCitelEmitidaAt).toBeInstanceOf(Date);
+    expect(tf.items[0].teNumber).toBeNull();
+  });
+
+  it("rejeita quando nenhum documento é informado", async () => {
+    const t = await setupTransferInAwaitingApproval();
+    await expect(approveTransfer(t.id, {}, "user-067")).rejects.toThrow(/TE ou NF/i);
+  });
+
+  it("rejeita quando ambos TE e NF são informados", async () => {
+    const t = await setupTransferInAwaitingApproval();
+    await expect(
+      approveTransfer(t.id, { teNumber: "TE-1", nfCitelNumero: "NF-1" }, "user-067"),
+    ).rejects.toThrow(/TE ou NF/i);
+  });
+
+  it("rejeita se status atual não é AWAITING_APPROVAL", async () => {
+    const t = seedTransfer(TransferStatus.PENDING, { fromStoreId: null });
+    await expect(
+      approveTransfer(t.id, { teNumber: "TE-1" }, "user-067"),
+    ).rejects.toThrow(/AWAITING_APPROVAL/);
   });
 });
