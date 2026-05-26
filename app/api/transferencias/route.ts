@@ -7,7 +7,7 @@ import { TransferPriority, TransferStatus } from "@prisma/client";
 
 const createSchema = z.object({
   deliveryRequestId: z.string().optional(),
-  fromStoreId: z.string(),
+  // fromStoreId não é mais aceito na criação — origem é definida só em indicate-origin
   toStoreId: z.string(),
   priority: z.nativeEnum(TransferPriority),
   notes: z.string().optional(),
@@ -69,21 +69,22 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (parsed.data.fromStoreId === parsed.data.toStoreId) {
-      return NextResponse.json(
-        apiError("Loja de origem e destino não podem ser iguais", "INVALID_STORES"),
-        { status: 400 }
-      );
-    }
-
-    const transfer = await createTransfer({
-      ...parsed.data,
-      requestedById: session.userId,
+    // Auto-split: N items → N Transfers, todas PENDING e fromStoreId=null.
+    // Origem é definida depois pela loja destino via POST .../indicate-origin.
+    const transfers = await createTransfer({
+      deliveryRequestId: parsed.data.deliveryRequestId,
+      toStoreId:         parsed.data.toStoreId,
+      priority:          parsed.data.priority,
+      notes:             parsed.data.notes,
+      items:             parsed.data.items,
+      requestedById:     session.userId,
     });
 
-    return NextResponse.json(apiSuccess(transfer), { status: 201 });
+    return NextResponse.json(apiSuccess({ transfers }), { status: 201 });
   } catch (error) {
     console.error("[POST /api/transferencias]", error);
-    return NextResponse.json(apiError("Erro ao criar transferência"), { status: 500 });
+    const msg = error instanceof Error ? error.message : "Erro ao criar transferência";
+    const status = /item/i.test(msg) ? 422 : 500;
+    return NextResponse.json(apiError(msg), { status });
   }
 }
