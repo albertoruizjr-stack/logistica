@@ -455,7 +455,7 @@ export default async function DashboardPage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-0.5">
                       <span className="text-[13px] font-medium" style={{ color: "var(--color-body-text)" }}>
-                        {transfer.fromStore.code} → {transfer.toStore.code}
+                        {transfer.fromStore?.code ?? "?"} → {transfer.toStore.code}
                       </span>
                       <span className={cn("text-[11px] px-1.5 py-0.5 rounded border font-medium", TRANSFER_PRIORITY_COLORS[transfer.priority])}>
                         {TRANSFER_PRIORITY_LABELS[transfer.priority]}

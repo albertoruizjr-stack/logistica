@@ -292,7 +292,7 @@ export default async function DespachoPainel() {
                   {dispatch.transfer && (
                     <p className="text-sm text-gray-700 flex items-center gap-1.5">
                       <ArrowLeftRight className="w-3.5 h-3.5 text-gray-400" />
-                      Transferência {dispatch.transfer.fromStore.code} → {dispatch.transfer.toStore.code}
+                      Transferência {dispatch.transfer.fromStore?.code ?? "?"} → {dispatch.transfer.toStore.code}
                     </p>
                   )}
                   {dispatch.driver && (

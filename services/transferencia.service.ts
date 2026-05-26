@@ -683,7 +683,7 @@ export async function updateTransferStatus(
   // Atrelado a nfCitelNumero (fiscal). Uma transferência por TE (não fiscal) NÃO
   // dispara citelTakesOver — o estoque permanece como qtdComprometida no ledger até
   // o recebimento (reconcileTransfer). Comportamento aceitável: TE não é documento fiscal.
-  if (isNewNf) {
+  if (isNewNf && current.fromStoreId) {
     for (const item of current.items) {
       await citelTakesOver({
         storeId: current.fromStoreId,
@@ -699,8 +699,10 @@ export async function updateTransferStatus(
   if (input.status === TransferStatus.CANCELLED) {
     const hadNf = !!current.nfCitelNumero;
 
-    // Citel ainda não controla → qtdComprometida está no ledger → libera
-    if (!hadNf) {
+    // Citel ainda não controla → qtdComprometida está no ledger → libera.
+    // fromStoreId pode ser null em transferências PENDING criadas no fluxo novo;
+    // nesse caso não há commit pra liberar.
+    if (!hadNf && current.fromStoreId) {
       for (const item of current.items) {
         await releaseStock({
           storeId: current.fromStoreId,
@@ -747,7 +749,7 @@ export async function updateTransferStatus(
         }];
       });
 
-    if (reconcileItems.length > 0) {
+    if (reconcileItems.length > 0 && current.fromStoreId) {
       const { hasDivergence, divergences } = await reconcileTransfer({
         transferId,
         sendingStoreId:   current.fromStoreId,

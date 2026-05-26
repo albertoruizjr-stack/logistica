@@ -151,15 +151,17 @@ export default async function RoteirizacaoPage() {
 
   // Coletas elegíveis = transferências para coletar que NÃO estão em rota ativa.
   const eligibleCollections = rawTransfers
-    .filter((t) => !transferIdsOnRoutes.has(t.id))
+    // Transfers elegíveis pra coleta sempre têm fromStore (status READY_TO_COLLECT
+    // ou legados garantem). Filtramos defensivamente pra satisfazer o tipo.
+    .filter((t) => !transferIdsOnRoutes.has(t.id) && t.fromStore != null)
     .map((t) => ({
       id:            t.id,
       doc:           t.teNumber ? `TE ${t.teNumber}` : t.nfCitelNumero ? `NF ${t.nfCitelNumero}` : `#${t.id.slice(-6)}`,
-      fromStoreId:   t.fromStore.id,
-      fromStoreCode: t.fromStore.code,
-      fromStoreName: t.fromStore.name,
-      fromLat:       t.fromStore.lat,
-      fromLng:       t.fromStore.lng,
+      fromStoreId:   t.fromStore!.id,
+      fromStoreCode: t.fromStore!.code,
+      fromStoreName: t.fromStore!.name,
+      fromLat:       t.fromStore!.lat,
+      fromLng:       t.fromStore!.lng,
       toStoreCode:   t.toStore.code,
       itemCount:     t._count.items,
     }));

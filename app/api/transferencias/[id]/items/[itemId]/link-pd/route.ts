@@ -89,10 +89,12 @@ export async function POST(
             select: { code: true },
           })
         : null;
-      const fromStore = await prisma.store.findUnique({
-        where: { id: transfer.fromStoreId },
-        select: { code: true },
-      });
+      const fromStore = transfer.fromStoreId
+        ? await prisma.store.findUnique({
+            where: { id: transfer.fromStoreId },
+            select: { code: true },
+          })
+        : null;
 
       void notifyTransferConfirmed({
         transferId:        transfer.id,

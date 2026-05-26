@@ -71,9 +71,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 3. Agrupa por loja de origem.
+    // 3. Agrupa por loja de origem. Transfers em fluxo de coleta sempre têm
+    //    fromStoreId (READY_TO_COLLECT ou legados); filtra defensivamente.
     const byStore = new Map<string, string[]>();
     for (const t of transfers) {
+      if (!t.fromStoreId) continue;
       const list = byStore.get(t.fromStoreId) ?? [];
       list.push(t.id);
       byStore.set(t.fromStoreId, list);

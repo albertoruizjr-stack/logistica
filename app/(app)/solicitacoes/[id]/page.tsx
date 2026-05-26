@@ -306,7 +306,7 @@ export default async function SolicitacaoDetalhePage({
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-0.5">
                         <span className="text-sm font-medium text-gray-900">
-                          {transfer.fromStore.code} → {transfer.toStore.code}
+                          {transfer.fromStore?.code ?? "?"} → {transfer.toStore.code}
                         </span>
                         <span className={cn(
                           "text-xs px-1.5 py-0.5 rounded border font-medium",

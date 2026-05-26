@@ -98,9 +98,10 @@ export async function PATCH(
     }
 
     // Loja origem REAL = a do PD interno vinculado (qualquer item da Transfer).
-    // Fallback: fromStoreId da Transfer.
+    // Fallback: fromStore.code (pode ser null em PENDING).
     const originStoreCode = transfer.items.find(i => i.linkedCitelStoreCode)?.linkedCitelStoreCode
-                         ?? transfer.fromStore.code;
+                         ?? transfer.fromStore?.code
+                         ?? null;
 
     // Permissão: ADMIN/LOGISTICS_OPERATOR podem qualquer transferência.
     // Outros roles (incluindo SELLER) — só se forem da loja origem.
@@ -195,7 +196,7 @@ export async function PATCH(
           orderNumber:          transfer.deliveryRequest?.orderNumber ?? null,
           storeCode:            transfer.deliveryRequest?.orderStore?.code,
           itemCount:            transfer.items.length,
-          fromStoreCode:        originStoreCode,
+          fromStoreCode:        originStoreCode ?? "?",
           cancelledByStoreCode: canceller?.store?.code ?? "?",
           cancelledByName:      canceller?.name,
           reason:               parsed.data.cancellationReason,
@@ -243,7 +244,7 @@ export async function PATCH(
         orderNumber:       transfer.deliveryRequest?.orderNumber ?? null,
         storeCode:         transfer.deliveryRequest?.orderStore?.code,
         itemCount,
-        fromStoreCode:     originStoreCode,
+        fromStoreCode:     originStoreCode ?? "?",
       };
       if (parsed.data.status === TransferStatus.APPROVED) {
         void notifyTransferConfirmed(refs);

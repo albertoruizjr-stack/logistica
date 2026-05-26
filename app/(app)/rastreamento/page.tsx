@@ -159,7 +159,7 @@ export default async function RastreamentoPage() {
         status: dp.status,
         transfer: dp.transfer
           ? {
-              fromStore: { code: dp.transfer.fromStore.code },
+              fromStore: { code: dp.transfer.fromStore?.code ?? "?" },
               toStore:   { code: dp.transfer.toStore.code },
             }
           : null,
