@@ -8,6 +8,7 @@ import { enrichDeliveryRequestStock, calculateDeliveryVolumeRules } from "@/serv
 import { findAutoLinkCandidatesWithProbe } from "@/services/internal-transfer.service";
 import { createOrUpdateInitialAudit } from "@/services/audit.service";
 import { notifyTransferCreated } from "@/services/notifications.service";
+import { createTransfer } from "@/services/transferencia.service";
 import { getDispatchWindow, isAfterFirstCutoff, isAfterSecondCutoff } from "@/lib/cutoff";
 import { recordSameDayException } from "@/services/audit.service";
 
@@ -356,57 +357,42 @@ export async function POST(req: NextRequest) {
     // e Jane pode criar a transferência manualmente. Logamos o erro e notificamos.
     const missingItems = itemsWithAvailability.filter((i) => !i.availableAtStore);
     if (missingItems.length > 0 && !citelDown) {
-      // Cria a Transfer direto via Prisma. Não usamos createTransfer() do service
-      // porque ele valida estoque na loja origem — e neste momento a origem real
-      // é DESCONHECIDA (vai ser uma das outras 4 lojas, descoberta quando o Jhow
-      // vincular o PD interno no Autcom). Por isso fromStore = toStore = loja
-      // do vendedor como placeholder; o link-pd corrige depois.
-      let transferId = "";
+      // Auto-split: cria N Transfers (1 por item) em PENDING com fromStoreId=null.
+      // A origem real é definida depois pela loja destino via indicate-origin.
+      // Auto-link Citel preserva o hint do PD interno encontrado por probe.
+      let firstTransferId = "";
       try {
         const priority = data.deliveryType === DeliveryType.URGENT
           ? TransferPriority.URGENT
           : TransferPriority.ANTICIPATED;
-        const t = await prisma.$transaction(async (tx) => {
-          const created = await tx.transfer.create({
-            data: {
-              deliveryRequestId: deliveryRequest.id,
-              fromStoreId:       data.storeId,
-              toStoreId:         data.storeId,
-              priority,
-              status:            TransferStatus.PENDING,
-              requestedById:     session.userId,
-              notes:             `Transferência automática para PD ${data.orderNumber}`,
-              items: {
-                create: missingItems.map((i) => ({
-                  productCode: i.productCode,
-                  productName: i.productName,
-                  quantity:    i.quantity,
-                  unit:        i.unit,
-                })),
-              },
-            },
-            include: { items: { select: { id: true, productCode: true, quantity: true } } },
-          });
-          await tx.transferHistory.create({
-            data: {
-              transferId:  created.id,
-              toStatus:    TransferStatus.PENDING,
-              changedById: session.userId,
-              notes:       "Transferência criada — aguardando vínculo com PD interno do Autcom",
-            },
-          });
-          return created;
-        });
-        transferId = t.id;
 
-        // Auto-vínculo: para cada item, busca PDs candidatos e vincula o mais recente
-        await Promise.all(t.items.map(async (ti) => {
+        const transfers = await createTransfer({
+          deliveryRequestId: deliveryRequest.id,
+          toStoreId:         data.storeId,
+          priority,
+          requestedById:     session.userId,
+          notes:             `Transferência automática para PD ${data.orderNumber}`,
+          items: missingItems.map((i) => ({
+            productCode: i.productCode,
+            productName: i.productName,
+            quantity:    i.quantity,
+            unit:        i.unit,
+          })),
+        });
+        firstTransferId = transfers[0]?.id ?? "";
+
+        // Auto-link Citel: para cada Transfer (1 item), busca PD candidato e
+        // grava como hint no item. NÃO indica origem automaticamente — Jhow
+        // confirma manualmente via UI.
+        await Promise.all(transfers.map(async (t) => {
+          const item = (t as any).items?.[0];
+          if (!item) return;
           try {
-            const cands = await findAutoLinkCandidatesWithProbe(ti.productCode, ti.quantity);
+            const cands = await findAutoLinkCandidatesWithProbe(item.productCode, item.quantity);
             if (cands.length === 0) return;
             const best = cands[0];
             await prisma.transferItem.update({
-              where: { id: ti.id },
+              where: { id: item.id },
               data: {
                 linkedCitelPD:        best.numeroDocumento,
                 linkedCitelStoreCode: best.codigoEmpresa,
@@ -415,19 +401,23 @@ export async function POST(req: NextRequest) {
               },
             });
           } catch (e) {
-            console.warn(`[POST solicitacoes] auto-link falhou pra ${ti.productCode}:`, e instanceof Error ? e.message : e);
+            console.warn(
+              `[POST solicitacoes] auto-link falhou pra ${item.productCode}:`,
+              e instanceof Error ? e.message : e,
+            );
           }
         }));
       } catch (err) {
         console.warn(
-          `[POST /api/solicitacoes] falha ao criar Transfer placeholder para PD ${data.orderNumber}: ` +
+          `[POST /api/solicitacoes] falha ao criar Transfers para PD ${data.orderNumber}: ` +
           (err instanceof Error ? err.message : String(err)),
         );
       }
 
-      // Notifica Jhow + Jane (gatilho #1) — independente de a Transfer ter sido criada
+      // Notifica Jhow + Jane (gatilho #1) — independente de as Transfers terem
+      // sido criadas. transferId aponta pra primeira (link continua via DR).
       void notifyTransferCreated({
-        transferId,
+        transferId: firstTransferId,
         deliveryRequestId: deliveryRequest.id,
         orderNumber:       data.orderNumber,
         storeCode:         orderStore.code,
