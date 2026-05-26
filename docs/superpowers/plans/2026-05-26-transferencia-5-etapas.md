@@ -57,7 +57,7 @@
 **Files:**
 - Create: `prisma/migration_5_etapas_transfer.sql`
 
-- [ ] **Step 1: Criar o arquivo SQL**
+- [x] **Step 1: Criar o arquivo SQL**
 
 ```sql
 -- ──────────────────────────────────────────────────────────────────────
@@ -135,11 +135,11 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ```
 
-- [ ] **Step 2: Validar o SQL com psql --dry-run** (opcional — não roda no DB ainda)
+- [x] **Step 2: Validar o SQL com psql --dry-run** (opcional — não roda no DB ainda)
 
 Vai ser exercido pelo script da Task 2.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add prisma/migration_5_etapas_transfer.sql
@@ -153,7 +153,7 @@ git commit -m "feat(transfers): SQL idempotente da migration 5 etapas"
 **Files:**
 - Create: `scripts/apply-migration-5-etapas.mjs`
 
-- [ ] **Step 1: Criar o script seguindo o padrão de `scripts/apply-migration.mjs`**
+- [x] **Step 1: Criar o script seguindo o padrão de `scripts/apply-migration.mjs`**
 
 ```js
 // Aplica prisma/migration_5_etapas_transfer.sql no Supabase via DIRECT_URL
@@ -217,14 +217,14 @@ try {
 }
 ```
 
-- [ ] **Step 2: Rodar em dry-run para validar parsing**
+- [x] **Step 2: Rodar em dry-run para validar parsing**
 
 Run: `node scripts/apply-migration-5-etapas.mjs`
 Expected: lista 8 seções, mensagem "Use --execute para aplicar"
 
-- [ ] **Step 3: NÃO rodar com --execute ainda** (vai na Task 26, depois do código pronto)
+- [x] **Step 3: NÃO rodar com --execute ainda** (vai na Task 26, depois do código pronto)
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add scripts/apply-migration-5-etapas.mjs
@@ -238,7 +238,7 @@ git commit -m "feat(transfers): script de aplicação da migration 5 etapas"
 **Files:**
 - Modify: `prisma/schema.prisma` (enum TransferStatus, Transfer, TransferItem)
 
-- [ ] **Step 1: Editar enum TransferStatus** (linha ~82)
+- [x] **Step 1: Editar enum TransferStatus** (linha ~82)
 
 ```prisma
 enum TransferStatus {
@@ -256,7 +256,7 @@ enum TransferStatus {
 }
 ```
 
-- [ ] **Step 2: Editar model Transfer** (linha ~661)
+- [x] **Step 2: Editar model Transfer** (linha ~661)
 
 Substituir o bloco inteiro do `model Transfer { ... @@map("transfers") }` por:
 
@@ -322,7 +322,7 @@ model Transfer {
 
 > Mantemos `teNumber/nfCitelNumero/nfCitelEmitidaAt` na Transfer também (em paralelo ao item) por compatibilidade com código legado que ainda lê desses campos — vão sendo descontinuados ao longo das tasks. Mais seguro que dropar de uma vez.
 
-- [ ] **Step 3: Editar model TransferItem** (linha ~731)
+- [x] **Step 3: Editar model TransferItem** (linha ~731)
 
 Substituir por:
 
@@ -359,7 +359,7 @@ model TransferItem {
 }
 ```
 
-- [ ] **Step 4: Adicionar back-relations em `model User`**
+- [x] **Step 4: Adicionar back-relations em `model User`**
 
 Localizar `model User { ... }` e adicionar (junto às relations existentes de Transfer):
 
@@ -368,19 +368,19 @@ Localizar `model User { ... }` e adicionar (junto às relations existentes de Tr
   transfersDelivered       Transfer[] @relation("TransferDeliveredBy")
 ```
 
-- [ ] **Step 5: Rodar prisma generate**
+- [x] **Step 5: Rodar prisma generate**
 
 Run: `npx prisma generate`
 Expected: "Generated Prisma Client" sem erros de schema
 
-- [ ] **Step 6: Verificar que tsc ainda passa**
+- [x] **Step 6: Verificar que tsc ainda passa**
 
 Run: `npx tsc --noEmit`
 Expected: 0 erros (pode haver warnings sobre campos não usados, ignorar)
 
 > **Importante:** se aparecer erro de tipo em código que referencia `transfer.teNumber` ou `.nfCitelNumero`, é esperado — vai ser corrigido nas tasks de service/UI. Por ora, anota os arquivos e segue. Os campos legados ainda existem no modelo, então o compilador não deve quebrar.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add prisma/schema.prisma
@@ -411,7 +411,7 @@ git commit -m "feat(transfers): schema 5 etapas (enum, Transfer, TransferItem)"
 - Modify: `services/transferencia.service.ts`
 - Modify: `__tests__/services/transferencia-5-etapas.test.ts`
 
-- [ ] **Step 1: Escrever test que falha**
+- [x] **Step 1: Escrever test que falha**
 
 Adicionar em `__tests__/services/transferencia-5-etapas.test.ts`:
 
@@ -459,12 +459,12 @@ describe("indicateOrigin", () => {
 });
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `npx vitest run __tests__/services/transferencia-5-etapas.test.ts -t "indicateOrigin"`
 Expected: FAIL com "indicateOrigin is not a function"
 
-- [ ] **Step 3: Implementar `indicateOrigin` em `services/transferencia.service.ts`**
+- [x] **Step 3: Implementar `indicateOrigin` em `services/transferencia.service.ts`**
 
 Adicionar após a função `createTransfer`:
 
@@ -548,12 +548,12 @@ export async function indicateOrigin(
 }
 ```
 
-- [ ] **Step 4: Rodar test e ver passar**
+- [x] **Step 4: Rodar test e ver passar**
 
 Run: `npx vitest run __tests__/services/transferencia-5-etapas.test.ts -t "indicateOrigin"`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add services/transferencia.service.ts __tests__/services/transferencia-5-etapas.test.ts
@@ -568,7 +568,7 @@ git commit -m "feat(transfers): indicateOrigin (PENDING → AWAITING_APPROVAL)"
 - Modify: `services/transferencia.service.ts`
 - Modify: `__tests__/services/transferencia-5-etapas.test.ts`
 
-- [ ] **Step 1: Escrever test que falha**
+- [x] **Step 1: Escrever test que falha**
 
 ```ts
 describe("approveTransfer", () => {
@@ -622,12 +622,12 @@ async function setupTransferInAwaitingApproval() {
 }
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `npx vitest run __tests__/services/transferencia-5-etapas.test.ts -t "approveTransfer"`
 Expected: FAIL com "approveTransfer is not a function"
 
-- [ ] **Step 3: Implementar `approveTransfer`**
+- [x] **Step 3: Implementar `approveTransfer`**
 
 ```ts
 // ──────────────────────────────────────────────
@@ -722,12 +722,12 @@ export async function approveTransfer(
 }
 ```
 
-- [ ] **Step 4: Rodar test e ver passar**
+- [x] **Step 4: Rodar test e ver passar**
 
 Run: `npx vitest run __tests__/services/transferencia-5-etapas.test.ts -t "approveTransfer"`
 Expected: PASS (3 testes)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add services/transferencia.service.ts __tests__/services/transferencia-5-etapas.test.ts
@@ -742,7 +742,7 @@ git commit -m "feat(transfers): approveTransfer (AWAITING_APPROVAL → READY_TO_
 - Modify: `services/transferencia.service.ts`
 - Modify: `__tests__/services/transferencia-5-etapas.test.ts`
 
-- [ ] **Step 1: Escrever test que falha**
+- [x] **Step 1: Escrever test que falha**
 
 ```ts
 describe("rejectTransferAtOrigin", () => {
@@ -767,12 +767,12 @@ describe("rejectTransferAtOrigin", () => {
 });
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `npx vitest run __tests__/services/transferencia-5-etapas.test.ts -t "rejectTransferAtOrigin"`
 Expected: FAIL com "rejectTransferAtOrigin is not a function"
 
-- [ ] **Step 3: Implementar**
+- [x] **Step 3: Implementar**
 
 ```ts
 // ──────────────────────────────────────────────
@@ -835,12 +835,12 @@ export async function rejectTransferAtOrigin(
 }
 ```
 
-- [ ] **Step 4: Rodar test e ver passar**
+- [x] **Step 4: Rodar test e ver passar**
 
 Run: `npx vitest run __tests__/services/transferencia-5-etapas.test.ts -t "rejectTransferAtOrigin"`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add services/transferencia.service.ts __tests__/services/transferencia-5-etapas.test.ts
@@ -855,7 +855,7 @@ git commit -m "feat(transfers): rejectTransferAtOrigin (AWAITING_APPROVAL → PE
 - Modify: `services/transferencia.service.ts`
 - Modify: `__tests__/services/transferencia-5-etapas.test.ts`
 
-- [ ] **Step 1: Escrever test que falha**
+- [x] **Step 1: Escrever test que falha**
 
 ```ts
 describe("collectTransfer", () => {
@@ -877,12 +877,12 @@ describe("collectTransfer", () => {
 });
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `npx vitest run __tests__/services/transferencia-5-etapas.test.ts -t "collectTransfer"`
 Expected: FAIL com "collectTransfer is not a function"
 
-- [ ] **Step 3: Implementar**
+- [x] **Step 3: Implementar**
 
 ```ts
 // ──────────────────────────────────────────────
@@ -933,12 +933,12 @@ export async function collectTransfer(
 }
 ```
 
-- [ ] **Step 4: Rodar test e ver passar**
+- [x] **Step 4: Rodar test e ver passar**
 
 Run: `npx vitest run __tests__/services/transferencia-5-etapas.test.ts -t "collectTransfer"`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add services/transferencia.service.ts __tests__/services/transferencia-5-etapas.test.ts
@@ -953,7 +953,7 @@ git commit -m "feat(transfers): collectTransfer (READY_TO_COLLECT → IN_TRANSIT
 - Modify: `services/transferencia.service.ts`
 - Modify: `__tests__/services/transferencia-5-etapas.test.ts`
 
-- [ ] **Step 1: Escrever test que falha**
+- [x] **Step 1: Escrever test que falha**
 
 ```ts
 describe("deliverTransfer", () => {
@@ -999,12 +999,12 @@ describe("deliverTransfer", () => {
 });
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `npx vitest run __tests__/services/transferencia-5-etapas.test.ts -t "deliverTransfer"`
 Expected: FAIL com "deliverTransfer is not a function"
 
-- [ ] **Step 3: Implementar**
+- [x] **Step 3: Implementar**
 
 ```ts
 // ──────────────────────────────────────────────
@@ -1095,7 +1095,7 @@ export async function deliverTransfer(
 }
 ```
 
-- [ ] **Step 4: Renomear `handleTransferReceivedOnRequest` para `handleTransferDeliveredOnRequest`**
+- [x] **Step 4: Renomear `handleTransferReceivedOnRequest` para `handleTransferDeliveredOnRequest`**
 
 Localizar a função em `services/transferencia.service.ts:~360` e:
 1. Renomear assinatura e todos os call sites no arquivo.
@@ -1104,12 +1104,12 @@ Localizar a função em `services/transferencia.service.ts:~360` e:
 4. Mensagens de log/notes do tipo "Transferência recebida" viram "Transferência entregue".
 5. Também atualizar o caller em `updateTransferStatus` (linha ~339) — substituir `if (input.status === TransferStatus.RECEIVED && current.deliveryRequestId)` por `if (input.status === TransferStatus.DELIVERED && current.deliveryRequestId)`. A função `updateTransferStatus` antiga continua viva pra compat com legados, mas seu uso novo deve preferir as funções específicas (`deliverTransfer`, etc.).
 
-- [ ] **Step 5: Rodar test e ver passar**
+- [x] **Step 5: Rodar test e ver passar**
 
 Run: `npx vitest run __tests__/services/transferencia-5-etapas.test.ts -t "deliverTransfer"`
 Expected: PASS (2 testes)
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add services/transferencia.service.ts __tests__/services/transferencia-5-etapas.test.ts
@@ -1124,7 +1124,7 @@ git commit -m "feat(transfers): deliverTransfer (IN_TRANSIT → DELIVERED) + ren
 - Modify: `services/transferencia.service.ts`
 - Modify: `__tests__/services/transferencia-5-etapas.test.ts`
 
-- [ ] **Step 1: Escrever tests da matriz**
+- [x] **Step 1: Escrever tests da matriz**
 
 ```ts
 describe("cancelTransfer", () => {
@@ -1153,12 +1153,12 @@ describe("cancelTransfer", () => {
 });
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `npx vitest run __tests__/services/transferencia-5-etapas.test.ts -t "cancelTransfer"`
 Expected: FAIL (cobre a função refatorada que ainda não existe)
 
-- [ ] **Step 3: Implementar `cancelTransfer`**
+- [x] **Step 3: Implementar `cancelTransfer`**
 
 Substituir o bloco antigo de cancelamento em `updateTransferStatus` por:
 
@@ -1249,12 +1249,12 @@ export async function cancelTransfer(
 }
 ```
 
-- [ ] **Step 4: Rodar tests e ver passar**
+- [x] **Step 4: Rodar tests e ver passar**
 
 Run: `npx vitest run __tests__/services/transferencia-5-etapas.test.ts -t "cancelTransfer"`
 Expected: PASS (6 testes)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add services/transferencia.service.ts __tests__/services/transferencia-5-etapas.test.ts
@@ -1269,7 +1269,7 @@ git commit -m "feat(transfers): cancelTransfer com matriz de ledger por status"
 - Modify: `services/transferencia.service.ts`
 - Modify: `__tests__/services/transferencia-5-etapas.test.ts`
 
-- [ ] **Step 1: Escrever test que falha**
+- [x] **Step 1: Escrever test que falha**
 
 ```ts
 describe("createTransfer (auto-split)", () => {
@@ -1315,12 +1315,12 @@ describe("createTransfer (auto-split)", () => {
 });
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `npx vitest run __tests__/services/transferencia-5-etapas.test.ts -t "createTransfer"`
 Expected: FAIL (cria 1 só ou comita estoque)
 
-- [ ] **Step 3: Substituir `createTransfer` em `services/transferencia.service.ts`**
+- [x] **Step 3: Substituir `createTransfer` em `services/transferencia.service.ts`**
 
 ```ts
 // ──────────────────────────────────────────────
@@ -1376,7 +1376,7 @@ export async function createTransfer(input: CreateTransferInput): Promise<Transf
 
 > Atualize `CreateTransferInput` em `types/index.ts` para remover `fromStoreId` (que era obrigatório) — passou a ser implícito (não existe na criação).
 
-- [ ] **Step 4: Atualizar `VALID_TRANSITIONS`** (linha ~600)
+- [x] **Step 4: Atualizar `VALID_TRANSITIONS`** (linha ~600)
 
 ```ts
 const VALID_TRANSITIONS: Record<TransferStatus, TransferStatus[]> = {
@@ -1393,7 +1393,7 @@ const VALID_TRANSITIONS: Record<TransferStatus, TransferStatus[]> = {
 };
 ```
 
-- [ ] **Step 5: Rodar tests + tsc**
+- [x] **Step 5: Rodar tests + tsc**
 
 Run: `npx vitest run __tests__/services/transferencia-5-etapas.test.ts`
 Expected: todos os testes PASS
@@ -1401,7 +1401,7 @@ Expected: todos os testes PASS
 Run: `npx tsc --noEmit`
 Expected: erros podem aparecer em callers de `createTransfer` que esperam single Transfer ou passam `fromStoreId` — anote os locais (vão ser corrigidos nas tasks 17/18)
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add services/transferencia.service.ts types/index.ts __tests__/services/transferencia-5-etapas.test.ts
@@ -1425,7 +1425,7 @@ git commit -m "feat(transfers): createTransfer com auto-split N→N + VALID_TRAN
 **Files:**
 - Create: `app/api/transferencias/[id]/indicate-origin/route.ts`
 
-- [ ] **Step 1: Criar o arquivo**
+- [x] **Step 1: Criar o arquivo**
 
 ```ts
 import { NextRequest, NextResponse } from "next/server";
@@ -1475,12 +1475,12 @@ export async function POST(
 }
 ```
 
-- [ ] **Step 2: Verificar com tsc**
+- [x] **Step 2: Verificar com tsc**
 
 Run: `npx tsc --noEmit`
 Expected: 0 erros nesse arquivo
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add app/api/transferencias/[id]/indicate-origin/route.ts
@@ -1494,7 +1494,7 @@ git commit -m "feat(transfers): rota POST .../indicate-origin"
 **Files:**
 - Create: `app/api/transferencias/[id]/approve/route.ts`
 
-- [ ] **Step 1: Criar o arquivo**
+- [x] **Step 1: Criar o arquivo**
 
 ```ts
 import { NextRequest, NextResponse } from "next/server";
@@ -1548,11 +1548,11 @@ export async function POST(
 }
 ```
 
-- [ ] **Step 2: Verificar com tsc**
+- [x] **Step 2: Verificar com tsc**
 
 Run: `npx tsc --noEmit`
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add app/api/transferencias/[id]/approve/route.ts
@@ -1566,7 +1566,7 @@ git commit -m "feat(transfers): rota POST .../approve"
 **Files:**
 - Create: `app/api/transferencias/[id]/reject-at-origin/route.ts`
 
-- [ ] **Step 1: Criar o arquivo**
+- [x] **Step 1: Criar o arquivo**
 
 ```ts
 import { NextRequest, NextResponse } from "next/server";
@@ -1614,11 +1614,11 @@ export async function POST(
 }
 ```
 
-- [ ] **Step 2: Verificar com tsc**
+- [x] **Step 2: Verificar com tsc**
 
 Run: `npx tsc --noEmit`
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add app/api/transferencias/[id]/reject-at-origin/route.ts
@@ -1632,7 +1632,7 @@ git commit -m "feat(transfers): rota POST .../reject-at-origin"
 **Files:**
 - Create: `app/api/transferencias/[id]/collect/route.ts`
 
-- [ ] **Step 1: Criar o arquivo**
+- [x] **Step 1: Criar o arquivo**
 
 ```ts
 import { NextRequest, NextResponse } from "next/server";
@@ -1686,11 +1686,11 @@ export async function POST(
 }
 ```
 
-- [ ] **Step 2: Verificar com tsc**
+- [x] **Step 2: Verificar com tsc**
 
 Run: `npx tsc --noEmit`
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add app/api/transferencias/[id]/collect/route.ts
@@ -1704,7 +1704,7 @@ git commit -m "feat(transfers): rota POST .../collect (motorista)"
 **Files:**
 - Create: `app/api/transferencias/[id]/deliver/route.ts`
 
-- [ ] **Step 1: Criar o arquivo**
+- [x] **Step 1: Criar o arquivo**
 
 ```ts
 import { NextRequest, NextResponse } from "next/server";
@@ -1759,11 +1759,11 @@ export async function POST(
 }
 ```
 
-- [ ] **Step 2: Verificar com tsc**
+- [x] **Step 2: Verificar com tsc**
 
 Run: `npx tsc --noEmit`
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add app/api/transferencias/[id]/deliver/route.ts
@@ -1777,7 +1777,7 @@ git commit -m "feat(transfers): rota POST .../deliver (motorista)"
 **Files:**
 - Create: `app/api/transferencias/[id]/cancel/route.ts`
 
-- [ ] **Step 1: Criar o arquivo**
+- [x] **Step 1: Criar o arquivo**
 
 ```ts
 import { NextRequest, NextResponse } from "next/server";
@@ -1820,11 +1820,11 @@ export async function POST(
 }
 ```
 
-- [ ] **Step 2: Verificar com tsc**
+- [x] **Step 2: Verificar com tsc**
 
 Run: `npx tsc --noEmit`
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add app/api/transferencias/[id]/cancel/route.ts
@@ -1838,7 +1838,7 @@ git commit -m "feat(transfers): rota POST .../cancel"
 **Files:**
 - Modify: `app/api/transferencias/route.ts`
 
-- [ ] **Step 1: Substituir o handler POST**
+- [x] **Step 1: Substituir o handler POST**
 
 Localizar `export async function POST(req: NextRequest)` no arquivo e substituir o conteúdo dentro do `try {}` por:
 
@@ -1889,12 +1889,12 @@ const createSchema = z.object({
 
 Remover o bloco `if (parsed.data.fromStoreId === parsed.data.toStoreId)` que validava origem != destino — não se aplica mais.
 
-- [ ] **Step 2: Verificar com tsc**
+- [x] **Step 2: Verificar com tsc**
 
 Run: `npx tsc --noEmit`
 Expected: arquivo compila
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add app/api/transferencias/route.ts
@@ -1910,7 +1910,7 @@ git commit -m "feat(transfers): POST /api/transferencias aceita N items (auto-sp
 **Files:**
 - Modify: `app/api/solicitacoes/route.ts:357-426`
 
-- [ ] **Step 1: Substituir o bloco de criação de Transfer placeholder**
+- [x] **Step 1: Substituir o bloco de criação de Transfer placeholder**
 
 Localizar (linha ~357):
 ```ts
@@ -1983,18 +1983,18 @@ if (missingItems.length > 0 && !citelDown) {
 }
 ```
 
-- [ ] **Step 2: Adicionar import de `createTransfer` no topo do arquivo se ainda não tiver**
+- [x] **Step 2: Adicionar import de `createTransfer` no topo do arquivo se ainda não tiver**
 
 ```ts
 import { createTransfer } from "@/services/transferencia.service";
 ```
 
-- [ ] **Step 3: Verificar com tsc**
+- [x] **Step 3: Verificar com tsc**
 
 Run: `npx tsc --noEmit`
 Expected: 0 erros nesse arquivo
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add app/api/solicitacoes/route.ts
