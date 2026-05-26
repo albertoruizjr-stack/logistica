@@ -552,6 +552,103 @@ export async function deliverTransfer(
 }
 
 // ──────────────────────────────────────────────
+// cancelTransfer — qualquer status não-terminal → CANCELLED
+//
+// Matriz de side effects:
+//   PENDING:           nada (ledger nem foi tocado)
+//   AWAITING_APPROVAL: releaseStock na origem
+//   READY_TO_COLLECT:  se TE: releaseStock + cancelTransit; se NF: só cancelTransit
+//   IN_TRANSIT:        se TE: releaseStock + cancelTransit; se NF: só cancelTransit
+//   DELIVERED:         erro (terminal)
+//   CANCELLED:         erro (já terminal)
+//
+// "TE/NF" é detectado por algum item.nfCitelNumero — se NF foi emitida, Citel
+// já assumiu o controle do estoque na origem e não devemos liberar via ledger.
+// ──────────────────────────────────────────────
+
+export async function cancelTransfer(
+  transferId: string,
+  reason: string,
+  cancelledById: string,
+) {
+  const current = await prisma.transfer.findUniqueOrThrow({
+    where: { id: transferId },
+    include: { items: true },
+  });
+
+  if (
+    current.status === TransferStatus.DELIVERED ||
+    current.status === TransferStatus.CANCELLED ||
+    current.status === TransferStatus.RECEIVED // legado terminal
+  ) {
+    throw new Error(`Não é possível cancelar transfer em status terminal: ${current.status}`);
+  }
+
+  const hadCommit = (
+    [
+      TransferStatus.AWAITING_APPROVAL,
+      TransferStatus.READY_TO_COLLECT,
+      TransferStatus.IN_TRANSIT,
+    ] as TransferStatus[]
+  ).includes(current.status);
+
+  const hadTransit = (
+    [TransferStatus.READY_TO_COLLECT, TransferStatus.IN_TRANSIT] as TransferStatus[]
+  ).includes(current.status);
+
+  const anyItemHasNf = current.items.some((i) => !!i.nfCitelNumero);
+
+  const updated = await prisma.$transaction(async (tx) => {
+    const t = await tx.transfer.update({
+      where: { id: transferId },
+      data: {
+        status:      TransferStatus.CANCELLED,
+        cancelledAt: new Date(),
+      },
+      include: { items: true, fromStore: true, toStore: true },
+    });
+    await tx.transferHistory.create({
+      data: {
+        transferId,
+        fromStatus:  current.status,
+        toStatus:    TransferStatus.CANCELLED,
+        changedById: cancelledById,
+        notes:       reason,
+      },
+    });
+    return t;
+  });
+
+  // Libera commitStock na origem (TE-only — NF é controlada por Citel)
+  if (hadCommit && !anyItemHasNf && current.fromStoreId) {
+    for (const item of current.items) {
+      await releaseStock({
+        storeId:     current.fromStoreId,
+        productCode: item.productCode,
+        qty:         item.quantity,
+        transferId,
+        operatorId:  cancelledById,
+      });
+    }
+  }
+
+  // Cancela qtdEmTransito no destino
+  if (hadTransit) {
+    for (const item of current.items) {
+      await cancelTransit({
+        toStoreId:   current.toStoreId,
+        productCode: item.productCode,
+        qty:         item.quantity,
+        transferId,
+        operatorId:  cancelledById,
+      });
+    }
+  }
+
+  return updated;
+}
+
+// ──────────────────────────────────────────────
 // PROGRESSÃO DE STATUS
 // ──────────────────────────────────────────────
 

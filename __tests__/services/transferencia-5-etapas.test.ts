@@ -251,6 +251,7 @@ import {
   rejectTransferAtOrigin,
   collectTransfer,
   deliverTransfer,
+  cancelTransfer,
 } from "@/services/transferencia.service";
 
 const { db, resetDb, seedLedger, seedTransfer, citel } = mocks;
@@ -592,5 +593,103 @@ describe("Task 8 — deliverTransfer", () => {
     await expect(deliverTransfer(t.id, {
       photoUrl: "u", photoPath: "p", recipientName: "X", receivedQty: 1,
     }, "driver-1")).rejects.toThrow(/IN_TRANSIT/);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Task 9 — cancelTransfer (matriz por status)
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// Matriz de side effects:
+//   PENDING:           nada
+//   AWAITING_APPROVAL: releaseStock na origem
+//   READY_TO_COLLECT TE: releaseStock + cancelTransit
+//   READY_TO_COLLECT NF: só cancelTransit (Citel já liberou)
+//   IN_TRANSIT TE:       releaseStock + cancelTransit
+//   IN_TRANSIT NF:       só cancelTransit
+//   DELIVERED/CANCELLED: erro (terminal)
+
+describe("Task 9 — cancelTransfer (matriz)", () => {
+  beforeEach(() => {
+    resetDb();
+    vi.clearAllMocks();
+    citel.isCitelConfigured.mockReturnValue(true);
+    citel.getSaldoDisponivel.mockResolvedValue({ saldoDisponivel: 100, saldoFisico: 100 });
+  });
+
+  it("PENDING → CANCELLED: ledger inalterado", async () => {
+    const t = seedTransfer(TransferStatus.PENDING, { fromStoreId: null });
+    // sem ledger seedado — pra confirmar que nada é tocado
+    const updated = await cancelTransfer(t.id, "teste", "user-1");
+
+    expect(updated.status).toBe(TransferStatus.CANCELLED);
+    expect((updated as any).cancelledAt).toBeInstanceOf(Date);
+    expect(db.ledgers.size).toBe(0);
+  });
+
+  it("AWAITING_APPROVAL → CANCELLED: releaseStock na origem", async () => {
+    const t = await setupTransferInAwaitingApproval();
+    expect(db.ledgers.get("store-a_TINT-001")!.qtdComprometida).toBe(3);
+
+    await cancelTransfer(t.id, "operadora trocou de ideia", "user-1");
+
+    expect(db.ledgers.get("store-a_TINT-001")!.qtdComprometida).toBe(0);
+  });
+
+  it("READY_TO_COLLECT com TE: releaseStock + cancelTransit", async () => {
+    const t = await setupTransferInReadyToCollect({ docType: "TE" });
+    expect(db.ledgers.get("store-a_TINT-001")!.qtdComprometida).toBe(3);
+    expect(db.ledgers.get("store-b_TINT-001")!.qtdEmTransito).toBe(3);
+
+    await cancelTransfer(t.id, "teste", "user-1");
+
+    expect(db.ledgers.get("store-a_TINT-001")!.qtdComprometida).toBe(0); // releaseStock
+    expect(db.ledgers.get("store-b_TINT-001")!.qtdEmTransito).toBe(0);   // cancelTransit
+  });
+
+  it("READY_TO_COLLECT com NF: só cancelTransit (Citel controla)", async () => {
+    const t = await setupTransferInReadyToCollect({ docType: "NF" });
+    // NF já disparou citelTakesOver: qtdComprometida na origem foi zerada
+    expect(db.ledgers.get("store-a_TINT-001")!.qtdComprometida).toBe(0);
+    expect(db.ledgers.get("store-b_TINT-001")!.qtdEmTransito).toBe(3);
+    const versionAntes = db.ledgers.get("store-a_TINT-001")!.version;
+
+    await cancelTransfer(t.id, "teste", "user-1");
+
+    // Origem não é tocada (Citel controla agora)
+    expect(db.ledgers.get("store-a_TINT-001")!.qtdComprometida).toBe(0);
+    expect(db.ledgers.get("store-a_TINT-001")!.version).toBe(versionAntes);
+
+    // Trânsito no destino é cancelado
+    expect(db.ledgers.get("store-b_TINT-001")!.qtdEmTransito).toBe(0);
+  });
+
+  it("IN_TRANSIT com TE: releaseStock + cancelTransit", async () => {
+    const t = await setupTransferInTransit({ docType: "TE" });
+    expect(db.ledgers.get("store-a_TINT-001")!.qtdComprometida).toBe(3);
+    expect(db.ledgers.get("store-b_TINT-001")!.qtdEmTransito).toBe(3);
+
+    await cancelTransfer(t.id, "teste", "user-1");
+
+    expect(db.ledgers.get("store-a_TINT-001")!.qtdComprometida).toBe(0);
+    expect(db.ledgers.get("store-b_TINT-001")!.qtdEmTransito).toBe(0);
+  });
+
+  it("DELIVERED: rejeita (terminal)", async () => {
+    const t = await setupTransferInTransit();
+    await deliverTransfer(t.id, {
+      photoUrl: "u", photoPath: "p", recipientName: "X", receivedQty: 3,
+    }, "driver-1");
+
+    await expect(cancelTransfer(t.id, "tarde demais", "user-1"))
+      .rejects.toThrow(/terminal/i);
+  });
+
+  it("CANCELLED: rejeita (já terminal)", async () => {
+    const t = seedTransfer(TransferStatus.PENDING, { fromStoreId: null });
+    await cancelTransfer(t.id, "primeiro cancel", "user-1");
+
+    await expect(cancelTransfer(t.id, "segundo cancel", "user-1"))
+      .rejects.toThrow(/terminal/i);
   });
 });
