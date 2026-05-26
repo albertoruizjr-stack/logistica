@@ -2011,7 +2011,7 @@ git commit -m "fix(solicitacoes): remove placeholder fromStore=toStore — usa c
 - Modify: `lib/constants.ts:27-53`
 - Modify: `components/ui/status-badge.tsx`
 
-- [ ] **Step 1: Atualizar `TRANSFER_STATUS_LABELS` em `lib/constants.ts`**
+- [x] **Step 1: Atualizar `TRANSFER_STATUS_LABELS` em `lib/constants.ts`**
 
 Substituir o objeto (linha 27-35):
 
@@ -2031,7 +2031,7 @@ export const TRANSFER_STATUS_LABELS: Record<string, string> = {
 };
 ```
 
-- [ ] **Step 2: Atualizar `TRANSFER_STATUS_COLORS` (linha 45-53)**
+- [x] **Step 2: Atualizar `TRANSFER_STATUS_COLORS` (linha 45-53)**
 
 ```ts
 export const TRANSFER_STATUS_COLORS: Record<string, string> = {
@@ -2049,7 +2049,7 @@ export const TRANSFER_STATUS_COLORS: Record<string, string> = {
 };
 ```
 
-- [ ] **Step 3: Atualizar `components/ui/status-badge.tsx`**
+- [x] **Step 3: Atualizar `components/ui/status-badge.tsx`**
 
 Procurar o switch/map de transferStatus no arquivo e garantir que os 3 novos valores são reconhecidos (devem cair automaticamente nos labels/colors acima). Se há um type union literal, adicionar:
 
@@ -2059,7 +2059,7 @@ Procurar o switch/map de transferStatus no arquivo e garantir que os 3 novos val
 | "DELIVERED"
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add lib/constants.ts components/ui/status-badge.tsx
@@ -2073,7 +2073,7 @@ git commit -m "feat(transfers): labels + cores dos 3 novos status"
 **Files:**
 - Modify: `components/transferencias/transfer-actions.tsx`
 
-- [ ] **Step 1: Substituir `NEXT_ACTIONS` (ou estrutura equivalente)**
+- [x] **Step 1: Substituir `NEXT_ACTIONS` (ou estrutura equivalente)**
 
 Procurar a const que mapeia status → próxima ação e substituir por:
 
@@ -2090,7 +2090,7 @@ const NEXT_ACTIONS: Record<string, { label: string; endpoint: string; needsForm?
 
 Adicionar lógica que renderiza os dialogs `IndicateOriginDialog` e `ApproveDialog` (criados nas tasks 20a e 20b abaixo) quando `needsForm` for definido.
 
-- [ ] **Step 2: Criar `app/(app)/transferencias/_components/indicate-origin-dialog.tsx`**
+- [x] **Step 2: Criar `app/(app)/transferencias/_components/indicate-origin-dialog.tsx`**
 
 ```tsx
 "use client";
@@ -2162,7 +2162,7 @@ export function IndicateOriginDialog({ transferId, toStoreCode, candidateStores,
 }
 ```
 
-- [ ] **Step 3: Criar `app/(app)/transferencias/_components/approve-dialog.tsx`**
+- [x] **Step 3: Criar `app/(app)/transferencias/_components/approve-dialog.tsx`**
 
 ```tsx
 "use client";
@@ -2242,11 +2242,11 @@ export function ApproveDialog({ transferId, productName, open, onOpenChange, onD
 }
 ```
 
-- [ ] **Step 4: Verificar com tsc**
+- [x] **Step 4: Verificar com tsc**
 
 Run: `npx tsc --noEmit`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add components/transferencias/transfer-actions.tsx app/\(app\)/transferencias/_components/indicate-origin-dialog.tsx app/\(app\)/transferencias/_components/approve-dialog.tsx
@@ -2261,7 +2261,7 @@ git commit -m "feat(transfers): dialogs de indicate-origin e approve + NEXT_ACTI
 - Modify: `app/(app)/transferencias/page.tsx`
 - Modify: `app/(app)/transferencias/_components/transferencias-filters.tsx`
 
-- [ ] **Step 1: Atualizar a lista de views/abas em `transferencias-filters.tsx`**
+- [x] **Step 1: Atualizar a lista de views/abas em `transferencias-filters.tsx`**
 
 Substituir o array de tabs por:
 
@@ -2276,7 +2276,7 @@ const TABS = [
 ] as const;
 ```
 
-- [ ] **Step 2: Atualizar `app/(app)/transferencias/page.tsx`**
+- [x] **Step 2: Atualizar `app/(app)/transferencias/page.tsx`**
 
 Na função que mapeia `view` → `statuses` para passar ao `listTransfers`, substituir o switch por:
 
@@ -2295,7 +2295,7 @@ Note que `para-coletar` inclui os legados (APPROVED/PREPARING/PREPARED) e `entre
 
 > Após a migration, esses legados são vazios — mas a UI continua robusta.
 
-- [ ] **Step 3: Atualizar os cards renderizados** para mostrar `fromStore` condicionalmente:
+- [x] **Step 3: Atualizar os cards renderizados** para mostrar `fromStore` condicionalmente:
 
 ```tsx
 {transfer.fromStoreId ? (
@@ -2311,12 +2311,12 @@ Note que `para-coletar` inclui os legados (APPROVED/PREPARING/PREPARED) e `entre
 )}
 ```
 
-- [ ] **Step 4: Verificar com tsc + build local rápido**
+- [x] **Step 4: Verificar com tsc + build local rápido**
 
 Run: `npx tsc --noEmit`
 Expected: 0 erros
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/\(app\)/transferencias/page.tsx app/\(app\)/transferencias/_components/transferencias-filters.tsx
@@ -2330,7 +2330,7 @@ git commit -m "feat(transfers): 6 abas + card condicional para PENDING"
 **Files:**
 - Modify: `app/(app)/transferencias/[id]/page.tsx`
 
-- [ ] **Step 1: Atualizar TIMELINE_CONFIG**
+- [x] **Step 1: Atualizar TIMELINE_CONFIG**
 
 Substituir o objeto por:
 
@@ -2385,7 +2385,7 @@ const ORDER: TransferStatus[] = [
 ];
 ```
 
-- [ ] **Step 2: Atualizar a seção de fotos para mostrar coleta E entrega lado-a-lado**
+- [x] **Step 2: Atualizar a seção de fotos para mostrar coleta E entrega lado-a-lado**
 
 ```tsx
 {(transfer.collectPhotoUrl || transfer.deliveryPhotoUrl) && (
@@ -2413,11 +2413,11 @@ const ORDER: TransferStatus[] = [
 )}
 ```
 
-- [ ] **Step 3: Verificar com tsc**
+- [x] **Step 3: Verificar com tsc**
 
 Run: `npx tsc --noEmit`
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add app/\(app\)/transferencias/\[id\]/page.tsx
@@ -2433,7 +2433,7 @@ git commit -m "feat(transfers): timeline e fotos com 5 etapas no detalhe"
 - Modify: arquivo do manifest do motorista (provavelmente `app/motorista/rotas/[id]/page.tsx` ou similar)
 - Possivelmente criar: `app/motorista/_components/transfer-card-driver.tsx`
 
-- [ ] **Step 1: Explorar a estrutura atual do app motorista**
+- [x] **Step 1: Explorar a estrutura atual do app motorista**
 
 Run: `ls app/motorista/`
 Listar os arquivos e identificar:
@@ -2442,7 +2442,7 @@ Listar os arquivos e identificar:
 
 Daí inferir onde inserir os cards de Transfer.
 
-- [ ] **Step 2: Criar componente `app/motorista/_components/transfer-card-driver.tsx`**
+- [x] **Step 2: Criar componente `app/motorista/_components/transfer-card-driver.tsx`**
 
 Estrutura:
 - Botão **Coletar** abre um dialog com câmera (reusar lib/image-compress.ts) + upload pro Supabase Storage (bucket `delivery-proofs` ou subpasta `transfers/`)
@@ -2508,7 +2508,7 @@ export function TransferCardDriver({ transfer, onDone }: Props) {
 }
 ```
 
-- [ ] **Step 3: Criar `CollectTransferDialog` e `DeliverTransferDialog`**
+- [x] **Step 3: Criar `CollectTransferDialog` e `DeliverTransferDialog`**
 
 Seguir o padrão dos dialogs existentes que fazem upload pra `delivery-proofs` (busca-se um na codebase: `grep -r "delivery-proofs" app/motorista/`). Copia a estrutura e adapta:
 
@@ -2516,15 +2516,15 @@ Seguir o padrão dos dialogs existentes que fazem upload pra `delivery-proofs` (
 
 `DeliverTransferDialog`: upload de foto + input recipient + input receivedQty → chama `POST /api/transferencias/[id]/deliver` com `{ photoUrl, photoPath, recipientName, receivedQty }`.
 
-- [ ] **Step 4: Integrar no manifest do motorista**
+- [x] **Step 4: Integrar no manifest do motorista**
 
 No arquivo principal do manifest (identificado no Step 1), adicionar uma seção "Transferências" que lista as Transfers cujo `dispatch.driverId === driverDoMotorista`, em status READY_TO_COLLECT ou IN_TRANSIT, renderizando `<TransferCardDriver>` para cada.
 
-- [ ] **Step 5: Verificar com tsc**
+- [x] **Step 5: Verificar com tsc**
 
 Run: `npx tsc --noEmit`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add app/motorista/
@@ -2541,7 +2541,7 @@ git commit -m "feat(transfers): app motorista com cards Coletar e Entregar"
 - Modify: `__tests__/services/pilar1-stock-lock.test.ts`
 - Modify: `__tests__/e2e/pilar1-staging.e2e.test.ts`
 
-- [ ] **Step 1: Em `pilar1-stock-lock.test.ts`, ajustar testes que esperam commitStock no createTransfer**
+- [x] **Step 1: Em `pilar1-stock-lock.test.ts`, ajustar testes que esperam commitStock no createTransfer**
 
 Procurar testes que verificam `qtdComprometida` aumentou após `createTransfer`. Reformular para:
 1. Chamar `createTransfer` → verificar que ledger NÃO mudou
@@ -2557,7 +2557,7 @@ it("indicateOrigin (não createTransfer) faz o commit", async () => {
 });
 ```
 
-- [ ] **Step 2: Em `pilar1-staging.e2e.test.ts`, atualizar fluxo E2E**
+- [x] **Step 2: Em `pilar1-staging.e2e.test.ts`, atualizar fluxo E2E**
 
 Substituir o trecho que faz:
 ```ts
@@ -2575,17 +2575,17 @@ await collectTransfer(t.id, { photoUrl: "x", photoPath: "y" }, driverId);
 await deliverTransfer(t.id, { photoUrl: "x", photoPath: "y", recipientName: "X", receivedQty: 1 }, driverId);
 ```
 
-- [ ] **Step 3: Rodar suite completa**
+- [x] **Step 3: Rodar suite completa**
 
 Run: `npx vitest run`
 Expected: todos os testes passam
 
-- [ ] **Step 4: Rodar tsc final**
+- [x] **Step 4: Rodar tsc final**
 
 Run: `npx tsc --noEmit`
 Expected: 0 erros
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add __tests__/
@@ -2599,7 +2599,7 @@ git commit -m "test(transfers): atualiza pilar1 e E2E para fluxo 5 etapas"
 **Files:**
 - Read-only varredura + correções pontuais
 
-- [ ] **Step 1: Greptar `TransferStatus.RECEIVED` em todo o código**
+- [x] **Step 1: Greptar `TransferStatus.RECEIVED` em todo o código**
 
 ```bash
 grep -rn "TransferStatus.RECEIVED" --include='*.ts' --include='*.tsx' app/ services/ components/ lib/
@@ -2609,7 +2609,7 @@ Para cada hit:
 - Se for em código de UI de listagem (ex: `entregues`), substituir por `DELIVERED` mantendo `RECEIVED` no array (compat com transfers antigas).
 - Se for em lógica de negócio nova, trocar por `DELIVERED`.
 
-- [ ] **Step 2: Greptar `TransferStatus.APPROVED`, `.PREPARING`, `.PREPARED`**
+- [x] **Step 2: Greptar `TransferStatus.APPROVED`, `.PREPARING`, `.PREPARED`**
 
 ```bash
 grep -rn "TransferStatus\.\(APPROVED\|PREPARING\|PREPARED\)" --include='*.ts' --include='*.tsx' app/ services/ components/ lib/
@@ -2617,7 +2617,7 @@ grep -rn "TransferStatus\.\(APPROVED\|PREPARING\|PREPARED\)" --include='*.ts' --
 
 Cada hit deve ser analisado: se é caminho ativo, trocar por `READY_TO_COLLECT`; se é só leitura/histórico, manter.
 
-- [ ] **Step 3: Greptar `transfer.teNumber` e `transfer.nfCitelNumero`** (acesso direto)
+- [x] **Step 3: Greptar `transfer.teNumber` e `transfer.nfCitelNumero`** (acesso direto)
 
 ```bash
 grep -rn "transfer\.\(teNumber\|nfCitelNumero\)" --include='*.tsx' app/ components/
@@ -2625,12 +2625,12 @@ grep -rn "transfer\.\(teNumber\|nfCitelNumero\)" --include='*.tsx' app/ componen
 
 Trocar por `transfer.items[0].teNumber` / `transfer.items[0].nfCitelNumero` em componentes novos, mantendo o acesso direto em rotas de compat se necessário.
 
-- [ ] **Step 4: Rodar tsc + tests novamente**
+- [x] **Step 4: Rodar tsc + tests novamente**
 
 Run: `npx tsc --noEmit && npx vitest run`
 Expected: tudo passa
 
-- [ ] **Step 5: Commit (se houver mudanças)**
+- [x] **Step 5: Commit (se houver mudanças)**
 
 ```bash
 git add -A  # apenas se mudanças foram só nesses paths
@@ -2644,17 +2644,17 @@ git commit -m "refactor(transfers): atualiza referências aos status antigos"
 **Files:**
 - Execução no banco + git push
 
-- [ ] **Step 1: Dry-run final**
+- [x] **Step 1: Dry-run final**
 
 Run: `node scripts/apply-migration-5-etapas.mjs`
 Expected: lista 8 seções
 
-- [ ] **Step 2: Aplicar no Supabase**
+- [x] **Step 2: Aplicar no Supabase**
 
 Run: `node scripts/apply-migration-5-etapas.mjs --execute`
 Expected: "✓ Migration aplicada com sucesso" + verificações OK
 
-- [ ] **Step 3: Validar manualmente no Supabase**
+- [x] **Step 3: Validar manualmente no Supabase**
 
 ```sql
 -- Cole no SQL editor do Supabase pra confirmar:
@@ -2664,17 +2664,17 @@ SELECT column_name FROM information_schema.columns
 SELECT conname FROM pg_constraint WHERE conname = 'transfer_origin_required';
 ```
 
-- [ ] **Step 4: Confirmar git status limpo**
+- [x] **Step 4: Confirmar git status limpo**
 
 Run: `git status`
 Expected: nothing to commit
 
-- [ ] **Step 5: Push para main**
+- [x] **Step 5: Push para main**
 
 Run: `git push origin main`
 Expected: Vercel deploy disparado automaticamente
 
-- [ ] **Step 6: Smoke test em produção** (manual)
+- [x] **Step 6: Smoke test em produção** (manual)
 
 1. Abrir `/transferencias` — vê 6 abas, transfers antigas em "Para coletar" (legados) ou "Entregues" (RECEIVED migrado)
 2. Criar uma solicitação com item faltando — gera Transfer em PENDING com `fromStoreId=null` e badge "🏪 X precisa"
@@ -2682,7 +2682,7 @@ Expected: Vercel deploy disparado automaticamente
 4. Como líder da origem (login diferente), aprovar com TE → status muda pra READY_TO_COLLECT
 5. Adicionar à wave, despachar, app motorista, coleta, entrega — verificar timeline completa
 
-- [ ] **Step 7: Sucesso? Atualizar memória do projeto**
+- [x] **Step 7: Sucesso? Atualizar memória do projeto**
 
 Criar/atualizar memory `project_transferencia_5_etapas.md` documentando o que foi deployado, datas, e qualquer ajuste pós-deploy.
 
