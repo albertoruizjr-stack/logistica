@@ -36,12 +36,23 @@ const client = new Client({ connectionString: url });
 await client.connect();
 
 try {
-  await client.query(sql);
-  console.log("✓ Migration aplicada com sucesso");
+  // PostgreSQL exige que ALTER TYPE ADD VALUE seja commitado antes do enum
+  // value novo ser usado. Por isso executamos seção por seção em queries
+  // separadas — cada client.query() é sua própria transação implícita.
+  // As seções já estão no array `blocks` (split por "-- N."). Reaplicamos o
+  // header "-- N." pra preservar comentários nos logs do servidor.
+  for (let i = 0; i < blocks.length; i++) {
+    const header = `-- ${i + 1}.`;
+    const sqlChunk = header + blocks[i];
+    process.stdout.write(`  [${i + 1}/${blocks.length}] ${blocks[i].trim().split("\n")[0].slice(0, 70)} ... `);
+    await client.query(sqlChunk);
+    console.log("✓");
+  }
+  console.log("\n✓ Migration aplicada com sucesso");
 
   // Verificações pós-migration
   const checks = [
-    `SELECT unnest(enum_range(NULL::"TransferStatus")) AS v WHERE unnest(enum_range(NULL::"TransferStatus"))::text IN ('AWAITING_APPROVAL','READY_TO_COLLECT','DELIVERED')`,
+    `SELECT v FROM (SELECT unnest(enum_range(NULL::"TransferStatus"))::text AS v) s WHERE s.v IN ('AWAITING_APPROVAL','READY_TO_COLLECT','DELIVERED')`,
     `SELECT column_name FROM information_schema.columns WHERE table_name='transfers' AND column_name IN ('originIndicatedAt','deliveredAt','deliveryPhotoUrl')`,
     `SELECT column_name FROM information_schema.columns WHERE table_name='transfer_items' AND column_name IN ('teNumber','nfCitelNumero','collectConfirmed')`,
     `SELECT indexname FROM pg_indexes WHERE tablename='transfers' AND indexname IN ('transfers_status_toStoreId_idx','transfers_status_fromStoreId_idx')`,
