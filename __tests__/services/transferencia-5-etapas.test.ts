@@ -249,6 +249,7 @@ import {
   indicateOrigin,
   approveTransfer,
   rejectTransferAtOrigin,
+  collectTransfer,
 } from "@/services/transferencia.service";
 
 const { db, resetDb, seedLedger, seedTransfer, citel } = mocks;
@@ -272,6 +273,21 @@ async function setupTransferInAwaitingApproval(
   seedLedger(fromStoreId, "TINT-001", { qtdFisica: 10, qtdComprometida: 0 });
   const t = seedTransfer(TransferStatus.PENDING, { fromStoreId: null, toStoreId });
   await indicateOrigin(t.id, fromStoreId, "user-132");
+  return db.transfers.get(t.id)!;
+}
+
+/**
+ * Cria uma Transfer em READY_TO_COLLECT — fluxo PENDING → AWAITING_APPROVAL
+ * via indicateOrigin → READY_TO_COLLECT via approveTransfer com TE.
+ */
+async function setupTransferInReadyToCollect(
+  overrides: { docType?: "TE" | "NF" } = {},
+) {
+  const t = await setupTransferInAwaitingApproval();
+  const docInput = overrides.docType === "NF"
+    ? { nfCitelNumero: "NF-50001" }
+    : { teNumber: "TE-50001" };
+  await approveTransfer(t.id, docInput, "user-067");
   return db.transfers.get(t.id)!;
 }
 
@@ -452,5 +468,48 @@ describe("Task 6 — rejectTransferAtOrigin", () => {
     await expect(
       rejectTransferAtOrigin(t.id, "motivo", "user-067"),
     ).rejects.toThrow(/AWAITING_APPROVAL/);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Task 7 — collectTransfer (READY_TO_COLLECT → IN_TRANSIT)
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe("Task 7 — collectTransfer", () => {
+  beforeEach(() => {
+    resetDb();
+    vi.clearAllMocks();
+    citel.isCitelConfigured.mockReturnValue(true);
+    citel.getSaldoDisponivel.mockResolvedValue({ saldoDisponivel: 100, saldoFisico: 100 });
+  });
+
+  it("READY_TO_COLLECT → IN_TRANSIT marca item.collectConfirmed e salva foto", async () => {
+    const t = await setupTransferInReadyToCollect();
+
+    const updated = await collectTransfer(t.id, {
+      photoUrl:  "https://supa.example/coleta.jpg",
+      photoPath: "transfers/x/coleta.jpg",
+    }, "driver-1");
+
+    expect(updated.status).toBe(TransferStatus.IN_TRANSIT);
+    expect((updated as any).collectPhotoUrl).toBe("https://supa.example/coleta.jpg");
+    expect((updated as any).collectPhotoPath).toBe("transfers/x/coleta.jpg");
+    expect((updated as any).collectedAt).toBeInstanceOf(Date);
+
+    const tf = db.transfers.get(t.id)!;
+    expect(tf.items[0].collectedAt).toBeInstanceOf(Date);
+    expect(tf.items[0].collectConfirmed).toBe(true);
+
+    const history = db.histories.find(
+      (h: any) => h.transferId === t.id && h.toStatus === TransferStatus.IN_TRANSIT,
+    );
+    expect(history).toBeDefined();
+  });
+
+  it("rejeita se status atual não é READY_TO_COLLECT", async () => {
+    const t = await setupTransferInAwaitingApproval();
+    await expect(
+      collectTransfer(t.id, { photoUrl: "u", photoPath: "p" }, "driver-1"),
+    ).rejects.toThrow(/READY_TO_COLLECT/);
   });
 });

@@ -401,6 +401,61 @@ export async function rejectTransferAtOrigin(
 }
 
 // ──────────────────────────────────────────────
+// collectTransfer — etapa 3 → 4 (READY_TO_COLLECT → IN_TRANSIT)
+//
+// Motorista coleta o material na origem com foto. Marca o item único como
+// collectConfirmed. Sem efeitos de ledger (qtdComprometida na origem já é
+// gerenciada por approveTransfer/citelTakesOver).
+// ──────────────────────────────────────────────
+
+export async function collectTransfer(
+  transferId: string,
+  input: { photoUrl: string; photoPath: string },
+  driverId: string,
+) {
+  const current = await prisma.transfer.findUniqueOrThrow({
+    where: { id: transferId },
+    include: { items: true },
+  });
+  if (current.status !== TransferStatus.READY_TO_COLLECT) {
+    throw new Error(
+      `Coleta só é válida em READY_TO_COLLECT (atual: ${current.status})`,
+    );
+  }
+  if (current.items.length !== 1) {
+    throw new Error(`Transfer deve ter 1 item (encontrados ${current.items.length})`);
+  }
+
+  const now = new Date();
+  return prisma.$transaction(async (tx) => {
+    const t = await tx.transfer.update({
+      where: { id: transferId },
+      data: {
+        status:           TransferStatus.IN_TRANSIT,
+        collectedAt:      now,
+        collectPhotoUrl:  input.photoUrl,
+        collectPhotoPath: input.photoPath,
+      },
+      include: { items: true, fromStore: true, toStore: true },
+    });
+    await tx.transferItem.update({
+      where: { id: current.items[0].id },
+      data:  { collectedAt: now, collectConfirmed: true },
+    });
+    await tx.transferHistory.create({
+      data: {
+        transferId,
+        fromStatus:  TransferStatus.READY_TO_COLLECT,
+        toStatus:    TransferStatus.IN_TRANSIT,
+        changedById: driverId,
+        notes:       "Coletada pelo motorista",
+      },
+    });
+    return t;
+  });
+}
+
+// ──────────────────────────────────────────────
 // PROGRESSÃO DE STATUS
 // ──────────────────────────────────────────────
 
