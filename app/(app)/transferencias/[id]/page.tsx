@@ -17,20 +17,25 @@ import {
 import Link from "next/link";
 import { TransferActionsPanel } from "@/components/transferencias/transfer-actions";
 
-// ícone e cor de cada evento da timeline
+// ícone e cor de cada evento da timeline — fluxo de 5 etapas + legados
 const TIMELINE_CONFIG: Record<TransferStatus, {
   icon: React.ElementType;
   bgColor: string;
   borderColor: string;
   iconColor: string;
 }> = {
-  PENDING:   { icon: Clock,         bgColor: "bg-yellow-50",  borderColor: "border-yellow-200", iconColor: "text-yellow-600" },
-  APPROVED:  { icon: CheckCircle2,  bgColor: "bg-blue-50",    borderColor: "border-blue-200",   iconColor: "text-blue-600" },
-  PREPARING: { icon: Box,           bgColor: "bg-purple-50",  borderColor: "border-purple-200", iconColor: "text-purple-600" },
-  PREPARED:  { icon: CheckCircle2,  bgColor: "bg-teal-50",    borderColor: "border-teal-200",   iconColor: "text-teal-600" },
-  IN_TRANSIT:{ icon: Truck,         bgColor: "bg-orange-50",  borderColor: "border-orange-200", iconColor: "text-orange-600" },
-  RECEIVED:  { icon: CheckCircle2,  bgColor: "bg-green-50",   borderColor: "border-green-200",  iconColor: "text-green-600" },
-  CANCELLED: { icon: XCircle,       bgColor: "bg-gray-50",    borderColor: "border-gray-200",   iconColor: "text-gray-500" },
+  // Fluxo novo de 5 etapas
+  PENDING:           { icon: Clock,        bgColor: "bg-yellow-50", borderColor: "border-yellow-200", iconColor: "text-yellow-600" },
+  AWAITING_APPROVAL: { icon: FileText,     bgColor: "bg-amber-50",  borderColor: "border-amber-200",  iconColor: "text-amber-700"  },
+  READY_TO_COLLECT:  { icon: CheckCircle2, bgColor: "bg-teal-50",   borderColor: "border-teal-200",   iconColor: "text-teal-600"   },
+  IN_TRANSIT:        { icon: Truck,        bgColor: "bg-orange-50", borderColor: "border-orange-200", iconColor: "text-orange-600" },
+  DELIVERED:         { icon: CheckCircle2, bgColor: "bg-green-50",  borderColor: "border-green-200",  iconColor: "text-green-600"  },
+  CANCELLED:         { icon: XCircle,      bgColor: "bg-gray-50",   borderColor: "border-gray-200",   iconColor: "text-gray-500"   },
+  // Legados — preservados pra timeline de transferências antigas
+  APPROVED:          { icon: CheckCircle2, bgColor: "bg-blue-50",   borderColor: "border-blue-200",   iconColor: "text-blue-600"   },
+  PREPARING:         { icon: Box,          bgColor: "bg-purple-50", borderColor: "border-purple-200", iconColor: "text-purple-600" },
+  PREPARED:          { icon: CheckCircle2, bgColor: "bg-teal-50",   borderColor: "border-teal-200",   iconColor: "text-teal-600"   },
+  RECEIVED:          { icon: CheckCircle2, bgColor: "bg-green-50",  borderColor: "border-green-200",  iconColor: "text-green-600"  },
 };
 
 export default async function TransferenciaDetalhePage({
@@ -90,7 +95,8 @@ export default async function TransferenciaDetalhePage({
   const userMap = new Map(changedByUsers.map((u) => [u.id, u.name]));
 
   const isFinished =
-    transfer.status === TransferStatus.RECEIVED ||
+    transfer.status === TransferStatus.DELIVERED ||
+    transfer.status === TransferStatus.RECEIVED ||  // legado terminal
     transfer.status === TransferStatus.CANCELLED;
 
   return (
@@ -108,15 +114,21 @@ export default async function TransferenciaDetalhePage({
       <div className="flex items-start justify-between mb-6">
         <div>
           <div className="flex items-center gap-3 mb-2">
-            <div className="flex items-center gap-2">
-              <span className="text-lg font-bold bg-gray-100 text-gray-800 px-3 py-1 rounded-lg">
-                {transfer.fromStore.code}
+            {transfer.fromStore ? (
+              <div className="flex items-center gap-2">
+                <span className="text-lg font-bold bg-gray-100 text-gray-800 px-3 py-1 rounded-lg">
+                  {transfer.fromStore.code}
+                </span>
+                <ArrowLeftRight className="w-5 h-5 text-gray-400" />
+                <span className="text-lg font-bold bg-gray-100 text-gray-800 px-3 py-1 rounded-lg">
+                  {transfer.toStore.code}
+                </span>
+              </div>
+            ) : (
+              <span className="text-sm font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-3 py-1.5 rounded-lg">
+                🏪 Loja {transfer.toStore.code} precisa — aguarda indicação de origem
               </span>
-              <ArrowLeftRight className="w-5 h-5 text-gray-400" />
-              <span className="text-lg font-bold bg-gray-100 text-gray-800 px-3 py-1 rounded-lg">
-                {transfer.toStore.code}
-              </span>
-            </div>
+            )}
             <span className={cn(
               "text-sm px-2.5 py-1 rounded-full font-medium border",
               TRANSFER_PRIORITY_COLORS[transfer.priority]
@@ -203,21 +215,24 @@ export default async function TransferenciaDetalhePage({
                   );
                 })}
 
-                {/* eventos futuros (placeholder) */}
+                {/* eventos futuros (placeholder) — fluxo de 5 etapas */}
                 {!isFinished &&
                   Object.entries(TIMELINE_CONFIG)
                     .filter(([status]) => {
                       const ORDER: TransferStatus[] = [
                         TransferStatus.PENDING,
-                        TransferStatus.APPROVED,
-                        TransferStatus.PREPARING,
-                        TransferStatus.PREPARED,
+                        TransferStatus.AWAITING_APPROVAL,
+                        TransferStatus.READY_TO_COLLECT,
                         TransferStatus.IN_TRANSIT,
-                        TransferStatus.RECEIVED,
+                        TransferStatus.DELIVERED,
                       ];
                       const currentIdx = ORDER.indexOf(transfer.status);
+                      // status legado (APPROVED/PREPARED/...) mapeia para READY_TO_COLLECT
+                      const effectiveCurrentIdx = currentIdx >= 0
+                        ? currentIdx
+                        : ORDER.indexOf(TransferStatus.READY_TO_COLLECT);
                       const thisIdx = ORDER.indexOf(status as TransferStatus);
-                      return thisIdx > currentIdx;
+                      return thisIdx > effectiveCurrentIdx;
                     })
                     .map(([status, cfg]) => {
                       const Icon = cfg.icon;
@@ -334,8 +349,14 @@ export default async function TransferenciaDetalhePage({
                   <span className="text-[10px] font-bold">O</span>
                 </div>
                 <div>
-                  <p className="text-sm font-medium text-gray-800">{transfer.fromStore.name}</p>
-                  <p className="text-xs text-gray-400">{transfer.fromStore.address}</p>
+                  {transfer.fromStore ? (
+                    <>
+                      <p className="text-sm font-medium text-gray-800">{transfer.fromStore.name}</p>
+                      <p className="text-xs text-gray-400">{transfer.fromStore.address}</p>
+                    </>
+                  ) : (
+                    <p className="text-sm font-medium text-amber-700">Aguardando indicação</p>
+                  )}
                 </div>
               </div>
               <div className="border-l-2 border-dashed border-gray-200 ml-2 h-4" />
@@ -350,6 +371,40 @@ export default async function TransferenciaDetalhePage({
               </div>
             </div>
           </section>
+
+          {/* Fotos de coleta + entrega (quando disponíveis) */}
+          {(transfer.collectPhotoUrl || transfer.deliveryPhotoUrl) && (
+            <section className="bg-white rounded-xl border border-gray-200 p-5">
+              <h3 className="text-xs font-semibold text-gray-400 uppercase mb-3">Provas fotográficas</h3>
+              <div className="grid grid-cols-2 gap-3">
+                {transfer.collectPhotoUrl && (
+                  <div>
+                    <h4 className="text-[11px] font-semibold text-gray-600 mb-1">📸 Coleta</h4>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={transfer.collectPhotoUrl} alt="Coleta" className="rounded-lg border border-gray-200 w-full object-cover aspect-square" />
+                    {transfer.collectedAt && (
+                      <p className="text-[10px] text-gray-400 mt-1">
+                        {formatDateTime(transfer.collectedAt)}
+                      </p>
+                    )}
+                  </div>
+                )}
+                {transfer.deliveryPhotoUrl && (
+                  <div>
+                    <h4 className="text-[11px] font-semibold text-gray-600 mb-1">📸 Entrega</h4>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={transfer.deliveryPhotoUrl} alt="Entrega" className="rounded-lg border border-gray-200 w-full object-cover aspect-square" />
+                    {transfer.deliveredAt && (
+                      <p className="text-[10px] text-gray-400 mt-1">
+                        {formatDateTime(transfer.deliveredAt)}
+                        {transfer.recipientName && ` — ${transfer.recipientName}`}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
 
           {/* Pessoas */}
           <section className="bg-white rounded-xl border border-gray-200 p-5">
