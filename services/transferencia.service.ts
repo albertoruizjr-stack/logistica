@@ -26,129 +26,62 @@ import {
 } from "./stock-ledger.service";
 
 // ──────────────────────────────────────────────
-// CRIAÇÃO DE TRANSFERÊNCIA
+// CRIAÇÃO DE TRANSFERÊNCIA — auto-split (etapa 0 → 1)
+//
+// N items → N Transfers (1 item cada), todas PENDING e fromStoreId=null.
+// O commitStock só roda em indicateOrigin, quando a loja destino escolhe a
+// origem. Aqui não tocamos o ledger — a origem ainda é desconhecida.
 // ──────────────────────────────────────────────
 
 export async function createTransfer(input: CreateTransferInput) {
-  // Passo 1: pré-valida estoque de todos os itens antes de persistir qualquer dado
-  // Se qualquer item falhar, nenhuma transferência é criada
-  const checkErrors: { productCode: string; productName: string; error: string; detail?: string }[] = [];
+  if (input.items.length === 0) {
+    throw new Error("Informe ao menos um item");
+  }
+
+  const created = [] as Array<Awaited<ReturnType<typeof prisma.transfer.create>>>;
 
   for (const item of input.items) {
-    const check = await preCheckStock({
-      storeId: input.fromStoreId,
-      productCode: item.productCode,
-      productName: item.productName,
-      qty: item.quantity,
-    });
-
-    if (!check.ok) {
-      const reason =
-        check.error === "CITEL_UNAVAILABLE"
-          ? "estoque insuficiente (Citel indisponível, usando dados locais)"
-          : "estoque insuficiente";
-
-      const detail = check.detail
-        ? `disponível: ${check.detail.saldoDisponivelReal}, solicitado: ${check.detail.qtdSolicitada}`
-        : undefined;
-
-      checkErrors.push({ productCode: item.productCode, productName: item.productName, error: reason, detail });
-    }
-  }
-
-  if (checkErrors.length > 0) {
-    const lines = checkErrors.map((e) =>
-      e.detail ? `${e.productName} (${e.productCode}): ${e.error} — ${e.detail}` : `${e.productName} (${e.productCode}): ${e.error}`
-    );
-    throw new Error(`Estoque insuficiente para criar a transferência:\n${lines.join("\n")}`);
-  }
-
-  // Passo 2: persiste transferência e histórico
-  const transfer = await prisma.$transaction(async (tx) => {
-    const t = await tx.transfer.create({
-      data: {
-        deliveryRequestId: input.deliveryRequestId,
-        fromStoreId: input.fromStoreId,
-        toStoreId: input.toStoreId,
-        priority: input.priority,
-        requestedById: input.requestedById,
-        notes: input.notes,
-        items: {
-          create: input.items.map((item) => ({
-            productCode: item.productCode,
-            productName: item.productName,
-            quantity: item.quantity,
-            unit: item.unit ?? "UN",
-          })),
+    const t = await prisma.$transaction(async (tx) => {
+      const newTransfer = await tx.transfer.create({
+        data: {
+          deliveryRequestId: input.deliveryRequestId,
+          fromStoreId:       null, // só preenchido em indicateOrigin
+          toStoreId:         input.toStoreId,
+          priority:          input.priority,
+          status:            TransferStatus.PENDING,
+          requestedById:     input.requestedById,
+          notes:             input.notes,
+          items: {
+            create: [{
+              productCode: item.productCode,
+              productName: item.productName,
+              quantity:    item.quantity,
+              unit:        item.unit ?? "UN",
+            }],
+          },
         },
-      },
-      include: { fromStore: true, toStore: true, items: true },
-    });
-
-    await tx.transferHistory.create({
-      data: {
-        transferId: t.id,
-        toStatus: TransferStatus.PENDING,
-        changedById: input.requestedById,
-        notes: "Transferência criada",
-      },
-    });
-
-    if (input.deliveryRequestId) {
-      await tx.deliveryRequest.update({
-        where: { id: input.deliveryRequestId },
-        data: { status: "AWAITING_TRANSFER" },
+        include: { items: true, toStore: true },
       });
-    }
-
-    return t;
-  });
-
-  // Passo 3: trava estoque no ledger (commitStock tem a própria transação)
-  // Falha por CONCURRENT_CONFLICT é rara e ainda pode ocorrer aqui (TOCTOU residual)
-  const commitErrors: { productCode: string; productName: string; error: string }[] = [];
-
-  for (const item of transfer.items) {
-    const result = await commitStock({
-      storeId: input.fromStoreId,
-      productCode: item.productCode,
-      productName: item.productName,
-      qty: item.quantity,
-      transferId: transfer.id,
-      operatorId: input.requestedById,
-    });
-
-    if (!result.success) {
-      commitErrors.push({
-        productCode: item.productCode,
-        productName: item.productName,
-        error: result.error === "CONCURRENT_CONFLICT"
-          ? "conflito de concorrência — tente novamente"
-          : "estoque insuficiente",
+      await tx.transferHistory.create({
+        data: {
+          transferId:  newTransfer.id,
+          toStatus:    TransferStatus.PENDING,
+          changedById: input.requestedById,
+          notes:       "Transferência criada (aguardando indicação de origem)",
+        },
       });
-    }
+      if (input.deliveryRequestId) {
+        await tx.deliveryRequest.update({
+          where: { id: input.deliveryRequestId },
+          data:  { status: "AWAITING_TRANSFER" },
+        });
+      }
+      return newTransfer;
+    });
+    created.push(t);
   }
 
-  // Se o commit falhou (caso raro de concorrência após pré-check), cancela e informa
-  if (commitErrors.length > 0) {
-    await prisma.transfer.update({
-      where: { id: transfer.id },
-      data: { status: TransferStatus.CANCELLED, cancelledAt: new Date() },
-    });
-    await prisma.transferHistory.create({
-      data: {
-        transferId: transfer.id,
-        fromStatus: TransferStatus.PENDING,
-        toStatus: TransferStatus.CANCELLED,
-        notes: `Cancelado — conflito de concorrência: ${commitErrors.map((e) => e.productCode).join(", ")}`,
-      },
-    });
-    throw new Error(
-      `Transferência cancelada por conflito de concorrência — tente novamente`
-    );
-  }
-
-  return transfer;
+  return created;
 }
 
 // ──────────────────────────────────────────────
@@ -1100,13 +1033,19 @@ export async function listTransfers(filters: {
 // ativo. PREPARING/PREPARED continuam no enum por compatibilidade; PREPARED → IN_TRANSIT
 // é mantido apenas para qualquer transferência legada que ainda esteja nesse estado.
 const VALID_TRANSITIONS: Record<TransferStatus, TransferStatus[]> = {
-  PENDING:    [TransferStatus.APPROVED,   TransferStatus.CANCELLED],
-  APPROVED:   [TransferStatus.IN_TRANSIT, TransferStatus.CANCELLED],
-  PREPARING:  [TransferStatus.PREPARED,   TransferStatus.CANCELLED],
-  PREPARED:   [TransferStatus.IN_TRANSIT, TransferStatus.CANCELLED],
-  IN_TRANSIT: [TransferStatus.RECEIVED,   TransferStatus.CANCELLED],
-  RECEIVED:   [],
-  CANCELLED:  [],
+  // Fluxo novo de 5 etapas — caminho ativo
+  PENDING:           [TransferStatus.AWAITING_APPROVAL, TransferStatus.CANCELLED],
+  AWAITING_APPROVAL: [TransferStatus.READY_TO_COLLECT,  TransferStatus.CANCELLED, TransferStatus.PENDING],
+  READY_TO_COLLECT:  [TransferStatus.IN_TRANSIT,        TransferStatus.CANCELLED],
+  IN_TRANSIT:        [TransferStatus.DELIVERED,         TransferStatus.CANCELLED],
+  DELIVERED:         [],
+  CANCELLED:         [],
+  // Legados — preservados para histórico/compat; caminhos antigos ainda funcionam
+  // para transferências criadas no fluxo anterior, mas o fluxo novo não os usa.
+  APPROVED:          [TransferStatus.IN_TRANSIT, TransferStatus.CANCELLED],
+  PREPARING:         [TransferStatus.PREPARED,   TransferStatus.CANCELLED],
+  PREPARED:          [TransferStatus.IN_TRANSIT, TransferStatus.CANCELLED],
+  RECEIVED:          [],
 };
 
 function validateStatusTransition(from: TransferStatus, to: TransferStatus): void {

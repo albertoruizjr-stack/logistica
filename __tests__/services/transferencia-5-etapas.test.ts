@@ -171,6 +171,40 @@ const mocks = vi.hoisted(() => {
   };
 
   p.transfer = {
+    create: vi.fn(async ({ data, include }: any) => {
+      db.transferIdSeq++;
+      const id = `transfer_${db.transferIdSeq}`;
+      const itemsInput = (data.items?.create ?? []) as any[];
+      const items: TransferItemRow[] = itemsInput.map((item, i) => ({
+        id: `item_${db.transferIdSeq}_${i + 1}`, transferId: id,
+        productCode: item.productCode, productName: item.productName,
+        quantity: item.quantity, sentQty: null, receivedQty: null,
+        unit: item.unit ?? "UN",
+        teNumber: null, nfCitelNumero: null, nfCitelEmitidaAt: null,
+        collectedAt: null, collectConfirmed: false,
+      }));
+      const t: TransferRow = {
+        id, status: data.status ?? "PENDING",
+        fromStoreId: data.fromStoreId ?? null,
+        toStoreId:   data.toStoreId,
+        priority:    data.priority ?? "ANTICIPATED",
+        nfCitelNumero: null, teNumber: null, nfCitelEmitidaAt: null,
+        originIndicatedAt: null, originIndicatedById: null,
+        approvedAt: null, approvedById: null,
+        collectedAt: null, receivedAt: null, deliveredAt: null, cancelledAt: null,
+        hasDivergence: false, divergenceCount: 0,
+        deliveryRequestId: data.deliveryRequestId ?? null,
+        items,
+        fromStore: data.fromStoreId
+          ? { id: data.fromStoreId, code: data.fromStoreId, name: data.fromStoreId }
+          : null,
+        toStore: { id: data.toStoreId, code: data.toStoreId, name: data.toStoreId },
+        deliveryRequest: null,
+      };
+      db.transfers.set(id, t);
+      void include;
+      return t;
+    }),
     update: vi.fn(async ({ where, data, include }: any) => {
       const t = db.transfers.get(where.id);
       if (!t) throw new Error(`Transfer ${where.id} não encontrado`);
@@ -252,6 +286,7 @@ import {
   collectTransfer,
   deliverTransfer,
   cancelTransfer,
+  createTransfer,
 } from "@/services/transferencia.service";
 
 const { db, resetDb, seedLedger, seedTransfer, citel } = mocks;
@@ -691,5 +726,84 @@ describe("Task 9 — cancelTransfer (matriz)", () => {
 
     await expect(cancelTransfer(t.id, "segundo cancel", "user-1"))
       .rejects.toThrow(/terminal/i);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Task 10 — createTransfer (auto-split N → N)
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe("Task 10 — createTransfer (auto-split)", () => {
+  beforeEach(() => {
+    resetDb();
+    vi.clearAllMocks();
+    citel.isCitelConfigured.mockReturnValue(true);
+    citel.getSaldoDisponivel.mockResolvedValue({ saldoDisponivel: 100, saldoFisico: 100 });
+  });
+
+  it("input com 3 items → cria 3 Transfers separadas, todas PENDING, fromStoreId=null", async () => {
+    const transfers = await createTransfer({
+      toStoreId:     "store-b",
+      priority:      TransferPriority.ANTICIPATED,
+      requestedById: "user-1",
+      items: [
+        { productCode: "A", productName: "A", quantity: 1, unit: "UN" },
+        { productCode: "B", productName: "B", quantity: 2, unit: "UN" },
+        { productCode: "C", productName: "C", quantity: 3, unit: "UN" },
+      ],
+    });
+
+    expect(transfers).toHaveLength(3);
+    for (const t of transfers) {
+      expect(t.status).toBe(TransferStatus.PENDING);
+      expect(t.fromStoreId).toBeNull();
+      expect((t as any).items).toHaveLength(1);
+    }
+    const productCodes = transfers.map((t: any) => t.items[0].productCode).sort();
+    expect(productCodes).toEqual(["A", "B", "C"]);
+  });
+
+  it("NÃO comita estoque na criação (fromStoreId ainda desconhecido)", async () => {
+    // Nenhum ledger seedado para a origem porque ela não existe ainda
+    const before = db.ledgerEntries.length;
+
+    const transfers = await createTransfer({
+      toStoreId:     "store-b",
+      priority:      TransferPriority.ANTICIPATED,
+      requestedById: "user-1",
+      items: [{ productCode: "X", productName: "x", quantity: 1, unit: "UN" }],
+    });
+
+    expect(transfers).toHaveLength(1);
+    expect(db.ledgerEntries.length).toBe(before); // nenhuma entrada nova de COMMIT
+    expect(db.ledgers.size).toBe(0);              // ledger não tocado
+  });
+
+  it("rejeita se items vazio", async () => {
+    await expect(createTransfer({
+      toStoreId:     "store-b",
+      priority:      TransferPriority.ANTICIPATED,
+      requestedById: "user-1",
+      items: [],
+    })).rejects.toThrow(/item/i);
+  });
+
+  it("cria history com toStatus=PENDING para cada Transfer", async () => {
+    const transfers = await createTransfer({
+      toStoreId:     "store-b",
+      priority:      TransferPriority.ANTICIPATED,
+      requestedById: "user-1",
+      items: [
+        { productCode: "A", productName: "A", quantity: 1, unit: "UN" },
+        { productCode: "B", productName: "B", quantity: 2, unit: "UN" },
+      ],
+    });
+
+    for (const t of transfers) {
+      const h = db.histories.find(
+        (x: any) => x.transferId === t.id && x.toStatus === TransferStatus.PENDING,
+      );
+      expect(h).toBeDefined();
+    }
   });
 });

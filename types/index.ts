@@ -468,7 +468,8 @@ export interface CreateDeliveryRequestInput {
 
 export interface CreateTransferInput {
   deliveryRequestId?: string;
-  fromStoreId: string;
+  /** @deprecated origem é definida em indicateOrigin; mantido aqui só pra compat de chamadas antigas — será ignorado pelo auto-split */
+  fromStoreId?: string;
   toStoreId: string;
   priority: TransferPriority;
   requestedById?: string;
