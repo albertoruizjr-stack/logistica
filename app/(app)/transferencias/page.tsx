@@ -344,6 +344,7 @@ export default async function TransferenciasPage({
                       transferId={transfer.id}
                       currentStatus={transfer.status}
                       priority={transfer.priority}
+                      toStoreId={transfer.toStoreId}
                       canAct={canAct}
                       originStoreCode={originStoreCode}
                     />

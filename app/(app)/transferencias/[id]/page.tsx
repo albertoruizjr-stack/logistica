@@ -315,6 +315,7 @@ export default async function TransferenciaDetalhePage({
                   transferId={transfer.id}
                   currentStatus={transfer.status}
                   priority={transfer.priority}
+                  toStoreId={transfer.toStoreId}
                 />
               </div>
             </section>
