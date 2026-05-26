@@ -1034,10 +1034,13 @@ export async function listTransfers(filters: {
 // é mantido apenas para qualquer transferência legada que ainda esteja nesse estado.
 const VALID_TRANSITIONS: Record<TransferStatus, TransferStatus[]> = {
   // Fluxo novo de 5 etapas — caminho ativo
-  PENDING:           [TransferStatus.AWAITING_APPROVAL, TransferStatus.CANCELLED],
+  // PENDING aceita também APPROVED como destino pra compat com transferências
+  // legadas que pulavam direto de PENDING → APPROVED via updateTransferStatus.
+  PENDING:           [TransferStatus.AWAITING_APPROVAL, TransferStatus.APPROVED /* legado */, TransferStatus.CANCELLED],
   AWAITING_APPROVAL: [TransferStatus.READY_TO_COLLECT,  TransferStatus.CANCELLED, TransferStatus.PENDING],
   READY_TO_COLLECT:  [TransferStatus.IN_TRANSIT,        TransferStatus.CANCELLED],
-  IN_TRANSIT:        [TransferStatus.DELIVERED,         TransferStatus.CANCELLED],
+  // IN_TRANSIT aceita DELIVERED (novo) ou RECEIVED (legado) como destino.
+  IN_TRANSIT:        [TransferStatus.DELIVERED,         TransferStatus.RECEIVED /* legado */, TransferStatus.CANCELLED],
   DELIVERED:         [],
   CANCELLED:         [],
   // Legados — preservados para histórico/compat; caminhos antigos ainda funcionam
