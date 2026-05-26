@@ -28,22 +28,31 @@ interface SearchParams {
 // Roles que veem tudo (sem auto-filtro por loja)
 const GLOBAL_VIEW_ROLES = new Set(["ADMIN", "OPERATOR", "LOGISTICS_OPERATOR", "STOCK_OPERATOR"]);
 
-// Agrupamentos funcionais de status.
-// "Para coletar" = APPROVED (fluxo novo: aprovada já fica disponível para coleta).
-// PREPARED é mantido só para qualquer transferência legada que ainda esteja nesse
-// estado até a migração consolidada; PREPARING saiu (não é mais alcançado).
+// Agrupamentos funcionais de status — fluxo de 5 etapas.
+// "Para coletar" inclui legados (APPROVED/PREPARING/PREPARED) pra cobrir transferências
+// antigas que estavam nesses estados antes do redesign. "Entregues" inclui RECEIVED
+// pelo mesmo motivo. Caminho ativo novo é só os status novos.
 const VIEW_STATUS_GROUPS: Record<string, TransferStatus[]> = {
-  "para-coletar": [TransferStatus.APPROVED, TransferStatus.PREPARED],
-  "em-rota":      [TransferStatus.IN_TRANSIT],
+  "pendente":         [TransferStatus.PENDING],
+  "aguard-aprovacao": [TransferStatus.AWAITING_APPROVAL],
+  "para-coletar":     [
+    TransferStatus.READY_TO_COLLECT,
+    // legados
+    TransferStatus.APPROVED, TransferStatus.PREPARING, TransferStatus.PREPARED,
+  ],
+  "em-rota":          [TransferStatus.IN_TRANSIT],
+  "entregues":        [TransferStatus.DELIVERED, TransferStatus.RECEIVED /* legado */],
+  "canceladas":       [TransferStatus.CANCELLED],
 };
 
 // Status considerados "ativos" (default quando nenhum filtro está aplicado)
 const ACTIVE_STATUSES: TransferStatus[] = [
   TransferStatus.PENDING,
-  TransferStatus.APPROVED,
-  TransferStatus.PREPARING,
-  TransferStatus.PREPARED,
+  TransferStatus.AWAITING_APPROVAL,
+  TransferStatus.READY_TO_COLLECT,
   TransferStatus.IN_TRANSIT,
+  // legados ainda em flight
+  TransferStatus.APPROVED, TransferStatus.PREPARING, TransferStatus.PREPARED,
 ];
 
 export default async function TransferenciasPage({
@@ -112,10 +121,12 @@ export default async function TransferenciasPage({
     statuses.reduce((sum, s) => sum + (countMap.get(s) ?? 0), 0);
 
   const countActive        = sumStatuses(ACTIVE_STATUSES);
-  const countPending       = countMap.get(TransferStatus.PENDING)  ?? 0;
+  const countPendente      = sumStatuses(VIEW_STATUS_GROUPS["pendente"]);
+  const countAguardAprov   = sumStatuses(VIEW_STATUS_GROUPS["aguard-aprovacao"]);
   const countParaColetar   = sumStatuses(VIEW_STATUS_GROUPS["para-coletar"]);
   const countEmRota        = sumStatuses(VIEW_STATUS_GROUPS["em-rota"]);
-  const countRecebidas     = countMap.get(TransferStatus.RECEIVED) ?? 0;
+  const countEntregues     = sumStatuses(VIEW_STATUS_GROUPS["entregues"]);
+  const countCanceladas    = sumStatuses(VIEW_STATUS_GROUPS["canceladas"]);
 
   const urgentCount = transfers.filter((t) => t.priority === TransferPriority.URGENT).length;
   const isAdminOrLogistics = ["ADMIN", "OPERATOR", "LOGISTICS_OPERATOR"].includes(session.role);
@@ -139,10 +150,16 @@ export default async function TransferenciasPage({
       isActive: noFilterActive,
     },
     {
+      label: "Pendente",
+      href: "/transferencias?view=pendente",
+      count: countPendente,
+      isActive: currentView === "pendente",
+    },
+    {
       label: "Aguard. aprovação",
-      href: "/transferencias?status=PENDING",
-      count: countPending,
-      isActive: currentStatus === "PENDING",
+      href: "/transferencias?view=aguard-aprovacao",
+      count: countAguardAprov,
+      isActive: currentView === "aguard-aprovacao",
     },
     {
       label: "Para coletar",
@@ -157,10 +174,16 @@ export default async function TransferenciasPage({
       isActive: currentView === "em-rota",
     },
     {
-      label: "Recebidas",
-      href: "/transferencias?status=RECEIVED",
-      count: countRecebidas,
-      isActive: currentStatus === "RECEIVED",
+      label: "Entregues",
+      href: "/transferencias?view=entregues",
+      count: countEntregues,
+      isActive: currentView === "entregues",
+    },
+    {
+      label: "Canceladas",
+      href: "/transferencias?view=canceladas",
+      count: countCanceladas,
+      isActive: currentView === "canceladas",
     },
   ];
 
@@ -255,23 +278,32 @@ export default async function TransferenciasPage({
               >
                 {/* Header do card */}
                 <div className="flex items-center gap-4 px-5 py-4">
-                  {/* Rota */}
+                  {/* Rota — PENDING não tem fromStore (origem só é definida em indicate-origin) */}
                   <div className="flex items-center gap-2 min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <span className={cn(
-                        "text-xs font-bold px-2 py-1 rounded",
-                        isOutgoing ? "bg-orange-100 text-orange-800" : "bg-gray-100 text-gray-700"
-                      )}>
-                        {transfer.fromStore.code}
-                      </span>
-                      <ArrowLeftRight className="w-3.5 h-3.5 text-gray-400" />
-                      <span className={cn(
-                        "text-xs font-bold px-2 py-1 rounded",
-                        isIncoming ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-700"
-                      )}>
-                        {transfer.toStore.code}
-                      </span>
-                    </div>
+                    {transfer.fromStore ? (
+                      <div className="flex items-center gap-1.5">
+                        <span className={cn(
+                          "text-xs font-bold px-2 py-1 rounded",
+                          isOutgoing ? "bg-orange-100 text-orange-800" : "bg-gray-100 text-gray-700"
+                        )}>
+                          {transfer.fromStore.code}
+                        </span>
+                        <ArrowLeftRight className="w-3.5 h-3.5 text-gray-400" />
+                        <span className={cn(
+                          "text-xs font-bold px-2 py-1 rounded",
+                          isIncoming ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-700"
+                        )}>
+                          {transfer.toStore.code}
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[11px] uppercase font-semibold tracking-wide text-amber-700 bg-amber-50 border border-amber-200 px-2 py-1 rounded">
+                          🏪 Loja {transfer.toStore.code} precisa
+                        </span>
+                        <span className="text-[10px] text-gray-400">aguarda indicação de origem</span>
+                      </div>
+                    )}
                     {!isGlobalViewer && (isIncoming || isOutgoing) && (
                       <span className="text-[10px] uppercase font-semibold tracking-wide text-gray-400">
                         {isIncoming ? "chegando" : "saindo"}
@@ -334,11 +366,15 @@ export default async function TransferenciasPage({
                   </div>
                 </div>
 
-                {/* Painel de ações — origem real considerando linkedCitelStoreCode */}
+                {/* Painel de ações — origem real considerando linkedCitelStoreCode.
+                    PENDING não tem fromStore: quem age é a loja destino (canAct se incoming). */}
                 {(() => {
                   const originStoreCode = transfer.items.find((i) => i.linkedCitelStoreCode)?.linkedCitelStoreCode
-                                       ?? transfer.fromStore.code;
-                  const canAct = isAdminOrLogistics || myStoreCode === originStoreCode || (isIncoming && session.role === "STORE_LEADER");
+                                       ?? transfer.fromStore?.code
+                                       ?? null;
+                  const canAct = isAdminOrLogistics
+                    || (originStoreCode != null && myStoreCode === originStoreCode)
+                    || (isIncoming && session.role === "STORE_LEADER");
                   return (
                     <TransferActionsPanel
                       transferId={transfer.id}
@@ -346,7 +382,7 @@ export default async function TransferenciasPage({
                       priority={transfer.priority}
                       toStoreId={transfer.toStoreId}
                       canAct={canAct}
-                      originStoreCode={originStoreCode}
+                      originStoreCode={originStoreCode ?? undefined}
                     />
                   );
                 })()}
