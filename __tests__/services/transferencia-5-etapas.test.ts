@@ -250,6 +250,7 @@ import {
   approveTransfer,
   rejectTransferAtOrigin,
   collectTransfer,
+  deliverTransfer,
 } from "@/services/transferencia.service";
 
 const { db, resetDb, seedLedger, seedTransfer, citel } = mocks;
@@ -288,6 +289,21 @@ async function setupTransferInReadyToCollect(
     ? { nfCitelNumero: "NF-50001" }
     : { teNumber: "TE-50001" };
   await approveTransfer(t.id, docInput, "user-067");
+  return db.transfers.get(t.id)!;
+}
+
+/**
+ * Cria uma Transfer em IN_TRANSIT — fluxo completo até coleta.
+ * Default: TE (não fiscal); passe docType "NF" para variar.
+ */
+async function setupTransferInTransit(
+  overrides: { docType?: "TE" | "NF" } = {},
+) {
+  const t = await setupTransferInReadyToCollect(overrides);
+  await collectTransfer(t.id, {
+    photoUrl:  "https://supa.example/coleta.jpg",
+    photoPath: "transfers/x/coleta.jpg",
+  }, "driver-1");
   return db.transfers.get(t.id)!;
 }
 
@@ -511,5 +527,70 @@ describe("Task 7 — collectTransfer", () => {
     await expect(
       collectTransfer(t.id, { photoUrl: "u", photoPath: "p" }, "driver-1"),
     ).rejects.toThrow(/READY_TO_COLLECT/);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Task 8 — deliverTransfer (IN_TRANSIT → DELIVERED)
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe("Task 8 — deliverTransfer", () => {
+  beforeEach(() => {
+    resetDb();
+    vi.clearAllMocks();
+    citel.isCitelConfigured.mockReturnValue(true);
+    citel.getSaldoDisponivel.mockResolvedValue({ saldoDisponivel: 100, saldoFisico: 100 });
+  });
+
+  it("IN_TRANSIT → DELIVERED reconcilia ledger (zera qtdEmTransito no destino)", async () => {
+    const t = await setupTransferInTransit();
+    expect(db.ledgers.get("store-b_TINT-001")!.qtdEmTransito).toBe(3);
+
+    const updated = await deliverTransfer(t.id, {
+      photoUrl:      "https://supa.example/entrega.jpg",
+      photoPath:     "transfers/x/entrega.jpg",
+      recipientName: "Maria Silva",
+      receivedQty:   3,
+    }, "driver-1");
+
+    expect(updated.status).toBe(TransferStatus.DELIVERED);
+    expect((updated as any).deliveredAt).toBeInstanceOf(Date);
+    expect((updated as any).deliveredById).toBe("driver-1");
+    expect((updated as any).recipientName).toBe("Maria Silva");
+
+    // qtdEmTransito zerada no destino
+    expect(db.ledgers.get("store-b_TINT-001")!.qtdEmTransito).toBe(0);
+
+    // sem divergência
+    expect((updated as any).hasDivergence).toBe(false);
+  });
+
+  it("registra divergência se receivedQty < quantity", async () => {
+    const t = await setupTransferInTransit();
+
+    const updated = await deliverTransfer(t.id, {
+      photoUrl:      "https://supa.example/entrega.jpg",
+      photoPath:     "transfers/x/entrega.jpg",
+      recipientName: "João",
+      receivedQty:   2, // enviou 3, recebeu 2
+    }, "driver-1");
+
+    expect((updated as any).hasDivergence).toBe(true);
+    expect(db.divergences).toHaveLength(1);
+    expect(db.divergences[0]).toMatchObject({
+      sentQty: 3, receivedQty: 2, divergenceQty: 1,
+    });
+
+    // persistido na Transfer também
+    const tf = db.transfers.get(t.id)!;
+    expect(tf.hasDivergence).toBe(true);
+    expect(tf.divergenceCount).toBe(1);
+  });
+
+  it("rejeita se status atual não é IN_TRANSIT", async () => {
+    const t = await setupTransferInReadyToCollect();
+    await expect(deliverTransfer(t.id, {
+      photoUrl: "u", photoPath: "p", recipientName: "X", receivedQty: 1,
+    }, "driver-1")).rejects.toThrow(/IN_TRANSIT/);
   });
 });

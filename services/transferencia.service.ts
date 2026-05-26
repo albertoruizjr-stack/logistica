@@ -456,6 +456,102 @@ export async function collectTransfer(
 }
 
 // ──────────────────────────────────────────────
+// deliverTransfer — etapa 4 → 5 (IN_TRANSIT → DELIVERED)
+//
+// Motorista entrega no destino com foto + nome do recebedor + qty recebida.
+// reconcileTransfer baixa qtdEmTransito e detecta divergência. Cascata na
+// DR vinculada (handleTransferDeliveredOnRequest) avança/registra evento.
+// ──────────────────────────────────────────────
+
+export async function deliverTransfer(
+  transferId: string,
+  input: {
+    photoUrl: string;
+    photoPath: string;
+    recipientName: string;
+    receivedQty: number;
+  },
+  driverId: string,
+) {
+  const current = await prisma.transfer.findUniqueOrThrow({
+    where: { id: transferId },
+    include: { items: true, deliveryRequest: true },
+  });
+  if (current.status !== TransferStatus.IN_TRANSIT) {
+    throw new Error(
+      `Entrega só é válida em IN_TRANSIT (atual: ${current.status})`,
+    );
+  }
+  if (current.items.length !== 1) {
+    throw new Error(`Transfer deve ter 1 item (encontrados ${current.items.length})`);
+  }
+  if (!current.fromStoreId) {
+    throw new Error("Transfer sem fromStoreId — estado inconsistente");
+  }
+  const item = current.items[0];
+
+  const now = new Date();
+  const updated = await prisma.$transaction(async (tx) => {
+    await tx.transferItem.update({
+      where: { id: item.id },
+      data:  { receivedQty: input.receivedQty },
+    });
+    const t = await tx.transfer.update({
+      where: { id: transferId },
+      data: {
+        status:            TransferStatus.DELIVERED,
+        deliveredAt:       now,
+        deliveredById:     driverId,
+        deliveryPhotoUrl:  input.photoUrl,
+        deliveryPhotoPath: input.photoPath,
+        recipientName:     input.recipientName,
+        receivedAt:        now, // legado, mantém pra compat
+      },
+      include: { items: true, fromStore: true, toStore: true },
+    });
+    await tx.transferHistory.create({
+      data: {
+        transferId,
+        fromStatus:  TransferStatus.IN_TRANSIT,
+        toStatus:    TransferStatus.DELIVERED,
+        changedById: driverId,
+        notes:       `Entregue para ${input.recipientName}`,
+      },
+    });
+    return t;
+  });
+
+  // Reconcilia ledger (baixa qtdEmTransito + cria divergence se receivedQty < sentQty)
+  const { hasDivergence, divergences } = await reconcileTransfer({
+    transferId,
+    sendingStoreId:   current.fromStoreId,
+    receivingStoreId: current.toStoreId,
+    operatorId:       driverId,
+    items: [{
+      transferItemId: item.id,
+      productCode:    item.productCode,
+      productName:    item.productName,
+      sentQty:        item.sentQty ?? item.quantity,
+      receivedQty:    input.receivedQty,
+    }],
+  });
+
+  if (hasDivergence) {
+    await prisma.transfer.update({
+      where: { id: transferId },
+      data:  { hasDivergence: true, divergenceCount: divergences.length },
+    });
+  }
+
+  // Cascata na DR vinculada
+  if (current.deliveryRequestId) {
+    await handleTransferDeliveredOnRequest(transferId, current.deliveryRequestId);
+  }
+
+  return { ...updated, hasDivergence };
+}
+
+// ──────────────────────────────────────────────
 // PROGRESSÃO DE STATUS
 // ──────────────────────────────────────────────
 
@@ -639,9 +735,14 @@ export async function updateTransferStatus(
     }
   }
 
-  // Atualiza a solicitação vinculada — parcial ou completa
-  if (input.status === TransferStatus.RECEIVED && current.deliveryRequestId) {
-    await handleTransferReceivedOnRequest(transferId, current.deliveryRequestId);
+  // Atualiza a solicitação vinculada — parcial ou completa.
+  // Status RECEIVED é mantido para compat com transferências legadas; o caminho
+  // novo (deliverTransfer) dispara handleTransferDeliveredOnRequest diretamente.
+  if (
+    (input.status === TransferStatus.DELIVERED || input.status === TransferStatus.RECEIVED) &&
+    current.deliveryRequestId
+  ) {
+    await handleTransferDeliveredOnRequest(transferId, current.deliveryRequestId);
   }
 
   return updated;
@@ -661,7 +762,7 @@ export async function updateTransferStatus(
 //   independente de divergência. metadata reflete se houve divergência
 //   pra revisão posterior. Se gate falhar (ex: itens não disponíveis no
 //   estoque), faz fallback pra READY com history manual.
-async function handleTransferReceivedOnRequest(
+async function handleTransferDeliveredOnRequest(
   transferId: string,
   deliveryRequestId: string,
 ) {
@@ -696,7 +797,7 @@ async function handleTransferReceivedOnRequest(
         ? `Transferência recebida (${receivedCount}/${total})${hasDivergences ? " — com divergência" : ""}`
         : `Todas as ${total} transferência${total > 1 ? "s" : ""} recebida${total > 1 ? "s" : ""}${hasDivergences ? " — com divergência" : ""}`,
       metadata: {
-        event: "TRANSFER_RECEIVED",
+        event: "TRANSFER_DELIVERED",
         transferId,
         receivedCount,
         totalTransfers: total,
