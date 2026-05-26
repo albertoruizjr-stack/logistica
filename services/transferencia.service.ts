@@ -152,6 +152,94 @@ export async function createTransfer(input: CreateTransferInput) {
 }
 
 // ──────────────────────────────────────────────
+// indicateOrigin — etapa 1 → 2 (PENDING → AWAITING_APPROVAL)
+//
+// Loja destino indica qual loja vai fornecer o material. Pré-valida estoque
+// na origem indicada, atualiza a Transfer e commita o estoque na origem.
+// ──────────────────────────────────────────────
+
+export async function indicateOrigin(
+  transferId: string,
+  fromStoreId: string,
+  indicatedById: string,
+) {
+  const current = await prisma.transfer.findUniqueOrThrow({
+    where: { id: transferId },
+    include: { items: true },
+  });
+
+  if (current.status !== TransferStatus.PENDING) {
+    throw new Error(
+      `Só é possível indicar origem em status PENDING (atual: ${current.status})`,
+    );
+  }
+  if (fromStoreId === current.toStoreId) {
+    throw new Error("Loja origem não pode ser igual à loja destino");
+  }
+
+  // Pré-check de estoque para todos os itens antes de qualquer escrita
+  for (const item of current.items) {
+    const check = await preCheckStock({
+      storeId:     fromStoreId,
+      productCode: item.productCode,
+      productName: item.productName,
+      qty:         item.quantity,
+    });
+    if (!check.ok) {
+      const detail = check.detail
+        ? ` — disponível: ${check.detail.saldoDisponivelReal}, solicitado: ${check.detail.qtdSolicitada}`
+        : "";
+      throw new Error(
+        `Estoque insuficiente em ${fromStoreId} para ${item.productName} (${item.productCode})${detail}`,
+      );
+    }
+  }
+
+  // Atualiza Transfer + histórico na mesma transação
+  const updated = await prisma.$transaction(async (tx) => {
+    const t = await tx.transfer.update({
+      where: { id: transferId },
+      data: {
+        fromStoreId,
+        status:              TransferStatus.AWAITING_APPROVAL,
+        originIndicatedAt:   new Date(),
+        originIndicatedById: indicatedById,
+      },
+      include: { items: true, fromStore: true, toStore: true },
+    });
+    await tx.transferHistory.create({
+      data: {
+        transferId,
+        fromStatus:  TransferStatus.PENDING,
+        toStatus:    TransferStatus.AWAITING_APPROVAL,
+        changedById: indicatedById,
+        notes:       `Origem indicada: ${(t as any).fromStore?.code ?? fromStoreId}`,
+      },
+    });
+    return t;
+  });
+
+  // Commita estoque na origem (cada commitStock tem a própria transação)
+  for (const item of current.items) {
+    const result = await commitStock({
+      storeId:     fromStoreId,
+      productCode: item.productCode,
+      productName: item.productName,
+      qty:         item.quantity,
+      transferId,
+      operatorId:  indicatedById,
+    });
+    if (!result.success) {
+      throw new Error(
+        `commitStock falhou para ${item.productCode}: ${result.error ?? "erro desconhecido"}`,
+      );
+    }
+  }
+
+  return updated;
+}
+
+// ──────────────────────────────────────────────
 // PROGRESSÃO DE STATUS
 // ──────────────────────────────────────────────
 
