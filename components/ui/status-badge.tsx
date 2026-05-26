@@ -11,7 +11,9 @@ export type StatusVariant =
   | "SEPARADO" | "AGUARDANDO_NF" | "NF_EMITIDA" | "NF_VINCULADA"
   | "PRONTO_ROTEIRIZACAO" | "ROTEIRIZADO" | "OCORRENCIA"
   | "READY" | "DISPATCHED" | "IN_TRANSIT" | "DELIVERED" | "CANCELLED"
-  | "URGENT" | "APPROVED" | "PREPARING" | "PREPARED" | "RECEIVED";
+  | "URGENT" | "APPROVED" | "PREPARING" | "PREPARED" | "RECEIVED"
+  // fluxo de 5 etapas (Transfer)
+  | "AWAITING_APPROVAL" | "READY_TO_COLLECT";
 
 interface StatusBadgeProps {
   status: StatusVariant | string;
@@ -44,6 +46,9 @@ const STATUS_MAP: Record<
   PREPARING:           { label: "Em Preparação",         bg: "rgba(124,58,237,0.10)", text: "#6D28D9", dot: "#7C3AED",  icon: Package2 },
   PREPARED:            { label: "Separada",              bg: "rgba(20,184,166,0.10)", text: "#0F766E", dot: "#14B8A6",  icon: PackageCheck },
   RECEIVED:            { label: "Recebida",              bg: "rgba(22,163,74,0.10)",  text: "#15803D", dot: "#16A34A",  icon: PackageCheck },
+  // fluxo de 5 etapas (Transfer)
+  AWAITING_APPROVAL:   { label: "Aguard. aprovação",     bg: "rgba(217,119,6,0.10)",  text: "#92400E", dot: "#D97706",  icon: FileText },
+  READY_TO_COLLECT:    { label: "Pronta p/ coleta",      bg: "rgba(20,184,166,0.10)", text: "#0F766E", dot: "#14B8A6",  icon: PackageCheck },
 };
 
 // Fallback defensivo pra status desconhecidos — em vez de quebrar a página inteira,

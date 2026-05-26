@@ -23,15 +23,19 @@ export const MAX_STANDARD_KM = 20;
 // multiplicador padrão para frete urgente (pode ser sobrescrito pelo banco)
 export const DEFAULT_URGENT_MULTIPLIER = 1.8;
 
-// labels dos status de transferência (pt-BR)
+// labels dos status de transferência (pt-BR) — fluxo de 5 etapas
 export const TRANSFER_STATUS_LABELS: Record<string, string> = {
-  PENDING: "Pendente",
-  APPROVED: "Aprovada",
-  PREPARING: "Em preparação",
-  PREPARED: "Separada",
-  IN_TRANSIT: "Em trânsito",
-  RECEIVED: "Recebida",
-  CANCELLED: "Cancelada",
+  PENDING:           "Pendente",
+  AWAITING_APPROVAL: "Aguard. aprovação",
+  READY_TO_COLLECT:  "Pronta p/ coleta",
+  IN_TRANSIT:        "Em rota",
+  DELIVERED:         "Entregue",
+  CANCELLED:         "Cancelada",
+  // legados — preservados para transferências antigas
+  APPROVED:          "Aprovada (legado)",
+  PREPARING:         "Em preparação (legado)",
+  PREPARED:          "Separada (legado)",
+  RECEIVED:          "Recebida (legado)",
 };
 
 // labels das prioridades de transferência
@@ -41,15 +45,19 @@ export const TRANSFER_PRIORITY_LABELS: Record<string, string> = {
   URGENT: "Urgente",
 };
 
-// cores de badge por status de transferência (classes Tailwind)
+// cores de badge por status de transferência (classes Tailwind) — 5 etapas
 export const TRANSFER_STATUS_COLORS: Record<string, string> = {
-  PENDING: "bg-yellow-100 text-yellow-800 border-yellow-200",
-  APPROVED: "bg-blue-100 text-blue-800 border-blue-200",
-  PREPARING: "bg-purple-100 text-purple-800 border-purple-200",
-  PREPARED: "bg-teal-100 text-teal-800 border-teal-200",
-  IN_TRANSIT: "bg-orange-100 text-orange-800 border-orange-200",
-  RECEIVED: "bg-green-100 text-green-800 border-green-200",
-  CANCELLED: "bg-gray-100 text-gray-600 border-gray-200",
+  PENDING:           "bg-yellow-100 text-yellow-800 border-yellow-200",
+  AWAITING_APPROVAL: "bg-amber-100 text-amber-900 border-amber-200",
+  READY_TO_COLLECT:  "bg-teal-100 text-teal-800 border-teal-200",
+  IN_TRANSIT:        "bg-orange-100 text-orange-800 border-orange-200",
+  DELIVERED:         "bg-green-100 text-green-800 border-green-200",
+  CANCELLED:         "bg-gray-100 text-gray-600 border-gray-200",
+  // legados
+  APPROVED:          "bg-blue-100 text-blue-800 border-blue-200",
+  PREPARING:         "bg-purple-100 text-purple-800 border-purple-200",
+  PREPARED:          "bg-teal-100 text-teal-800 border-teal-200",
+  RECEIVED:          "bg-green-100 text-green-800 border-green-200",
 };
 
 // cores por prioridade
