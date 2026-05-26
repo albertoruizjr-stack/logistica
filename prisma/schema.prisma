@@ -80,13 +80,17 @@ enum SLAType {
 }
 
 enum TransferStatus {
-  PENDING      // criada, aguardando aprovação
-  APPROVED     // aprovada pelo operador
-  PREPARING    // loja de origem separando os itens
-  PREPARED     // separada — aguardando coleta pelo motorista
-  IN_TRANSIT   // a caminho da loja de destino
-  RECEIVED     // recebida na loja de destino
-  CANCELLED    // cancelada
+  PENDING              // 1ª etapa - aguarda loja destino indicar origem
+  AWAITING_APPROVAL    // 2ª etapa - aguarda loja origem digitar TE/NF
+  READY_TO_COLLECT     // 3ª etapa - aprovada, aguarda coleta pelo motorista
+  IN_TRANSIT           // 4ª etapa - motorista coletou, a caminho
+  DELIVERED            // 5ª etapa - entregue no destino
+  CANCELLED            // cancelada em qualquer ponto
+  // legados — preservados para histórico (TransferHistory aponta pra eles)
+  APPROVED
+  PREPARING
+  PREPARED
+  RECEIVED
 }
 
 enum TransferPriority {
@@ -310,6 +314,8 @@ model User {
   dispatches        Dispatch[]        @relation("DispatchedBy")
   transfersRequested Transfer[]       @relation("TransferRequestedBy")
   transfersApproved  Transfer[]       @relation("TransferApprovedBy")
+  transfersOriginIndicated Transfer[] @relation("TransferOriginIndicatedBy")
+  transfersDelivered       Transfer[] @relation("TransferDeliveredBy")
   auditJustifications  FreightAudit[]       @relation("AuditJustifiedBy")
   auditSales           FreightAudit[]       @relation("AuditSeller")
   divergencesResolved  TransferDivergence[] @relation("DivergenceResolvedBy")
@@ -659,53 +665,60 @@ model DeliveryItem {
 // ──────────────────────────────────────────────
 
 model Transfer {
-  id                String           @id @default(cuid())
-  // referência à solicitação de entrega (pode ser nula — transferência autônoma)
-  deliveryRequestId String?
-  fromStoreId       String
-  toStoreId         String
-  priority          TransferPriority
-  status            TransferStatus   @default(PENDING)
-  requestedById     String?
-  approvedById      String?
-  // datas do ciclo de vida
-  requestedAt       DateTime         @default(now())
-  approvedAt        DateTime?
-  preparingAt       DateTime?
-  preparedAt        DateTime?
-  dispatchedAt      DateTime?
-  receivedAt        DateTime?
-  cancelledAt       DateTime?
-  updatedAt         DateTime         @updatedAt
-  // contexto
-  notes             String?
-  internalNotes     String?  // notas do operador, não visíveis ao vendedor
-  estimatedArrival  DateTime?
-  // NF emitida no Citel — quando preenchida, o Citel passa a controlar a reserva.
-  // citelTakesOver() só roda quando este campo é definido pela primeira vez.
-  nfCitelNumero     String?
-  nfCitelEmitidaAt  DateTime?
-  // Documento da transferência informado na autorização: TE (comprovante, não fiscal)
-  // OU NF (fiscal — reusa nfCitelNumero acima). teNumber guarda o caso TE.
-  teNumber          String?
-  // Comprovante de coleta — motorista bate foto ao coletar (PREPARED/APPROVED → IN_TRANSIT)
-  collectPhotoUrl   String?
-  collectPhotoPath  String?
-  collectedAt       DateTime?
-  // controle de divergência no recebimento
-  hasDivergence     Boolean  @default(false)
-  divergenceCount   Int      @default(0)
+  id                  String           @id @default(cuid())
+  deliveryRequestId   String?
+  fromStoreId         String?
+  toStoreId           String
+  priority            TransferPriority
+  status              TransferStatus   @default(PENDING)
+  requestedById       String?
+  approvedById        String?
 
-  deliveryRequest DeliveryRequest?    @relation(fields: [deliveryRequestId], references: [id])
-  fromStore       Store               @relation("TransferFrom", fields: [fromStoreId], references: [id])
-  toStore         Store               @relation("TransferTo", fields: [toStoreId], references: [id])
-  requestedBy     User?               @relation("TransferRequestedBy", fields: [requestedById], references: [id])
-  approvedBy      User?               @relation("TransferApprovedBy", fields: [approvedById], references: [id])
-  items           TransferItem[]
-  dispatch        Dispatch?           @relation("TransferDispatch")
-  history         TransferHistory[]
-  divergences     TransferDivergence[]
+  requestedAt         DateTime         @default(now())
+  originIndicatedAt   DateTime?
+  originIndicatedById String?
+  approvedAt          DateTime?
+  preparingAt         DateTime?
+  preparedAt          DateTime?
+  dispatchedAt        DateTime?
+  collectedAt         DateTime?
+  receivedAt          DateTime?
+  deliveredAt         DateTime?
+  cancelledAt         DateTime?
+  updatedAt           DateTime         @updatedAt
 
+  notes               String?
+  internalNotes       String?
+  estimatedArrival    DateTime?
+
+  nfCitelNumero       String?
+  nfCitelEmitidaAt    DateTime?
+  teNumber            String?
+
+  collectPhotoUrl     String?
+  collectPhotoPath    String?
+  deliveryPhotoUrl    String?
+  deliveryPhotoPath   String?
+  deliveredById       String?
+  recipientName       String?
+
+  hasDivergence       Boolean  @default(false)
+  divergenceCount     Int      @default(0)
+
+  deliveryRequest     DeliveryRequest?    @relation(fields: [deliveryRequestId], references: [id])
+  fromStore           Store?              @relation("TransferFrom", fields: [fromStoreId], references: [id])
+  toStore             Store               @relation("TransferTo",   fields: [toStoreId],   references: [id])
+  requestedBy         User?               @relation("TransferRequestedBy",       fields: [requestedById],       references: [id])
+  approvedBy          User?               @relation("TransferApprovedBy",        fields: [approvedById],        references: [id])
+  originIndicatedBy   User?               @relation("TransferOriginIndicatedBy", fields: [originIndicatedById], references: [id])
+  deliveredBy         User?               @relation("TransferDeliveredBy",       fields: [deliveredById],       references: [id])
+  items               TransferItem[]
+  dispatch            Dispatch?           @relation("TransferDispatch")
+  history             TransferHistory[]
+  divergences         TransferDivergence[]
+
+  @@index([status, toStoreId])
+  @@index([status, fromStoreId])
   @@map("transfers")
 }
 
@@ -729,25 +742,31 @@ model TransferHistory {
 // ──────────────────────────────────────────────
 
 model TransferItem {
-  id           String  @id @default(cuid())
-  transferId   String
-  productCode  String
-  productName  String
-  quantity     Float   // quantidade solicitada
-  unit         String  @default("UN")
-  sentQty      Float?  // quantidade enviada (pode ser menor)
-  receivedQty  Float?  // quantidade confirmada no recebimento
-  // Vínculo com PD interno do Autcom (cliente Atual Tintas)
-  // Quando preenchido, indica que o Jhow já criou a transferência no ERP.
+  id                   String   @id @default(cuid())
+  transferId           String
+  productCode          String
+  productName          String
+  quantity             Float
+  unit                 String   @default("UN")
+  sentQty              Float?
+  receivedQty          Float?
+
+  teNumber             String?
+  nfCitelNumero        String?
+  nfCitelEmitidaAt     DateTime?
+  collectedAt          DateTime?
+  collectConfirmed     Boolean  @default(false)
+
   linkedCitelPD        String?
   linkedCitelStoreCode String?
   linkedAt             DateTime?
   linkedById           String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
 
-  transfer    Transfer             @relation(fields: [transferId], references: [id], onDelete: Cascade)
-  divergences TransferDivergence[]
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  transfer             Transfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  divergences          TransferDivergence[]
 
   @@index([linkedCitelPD])
   @@map("transfer_items")
