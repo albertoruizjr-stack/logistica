@@ -3,7 +3,8 @@ import { prisma } from "@/lib/prisma";
 import { getSessionFromRequest } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/types";
 import { uploadTransferCollectPhoto, isStorageConfigured } from "@/lib/supabase-storage";
-import { updateTransferStatus } from "@/services/transferencia.service";
+import { updateTransferStatus, collectTransfer } from "@/services/transferencia.service";
+import { TransferStatus } from "@prisma/client";
 import { isTransferCollectPhotoRequired } from "@/services/system-config.service";
 import { extractTransferIds, type RouteSequenceEntry } from "@/lib/route-sequence";
 
@@ -106,21 +107,41 @@ export async function POST(req: NextRequest) {
     const collected: string[] = [];
     const failed:    { id: string; reason: string }[] = [];
 
+    // Para fluxo novo (READY_TO_COLLECT) usa collectTransfer (transação completa
+    // com item.collectConfirmed). Para legados (APPROVED/PREPARED) usa o caminho
+    // antigo (updateTransferStatus + manual update) pra preservar compat.
+    const currentStatuses = await prisma.transfer.findMany({
+      where:  { id: { in: requestedIds } },
+      select: { id: true, status: true },
+    });
+    const statusMap = new Map(currentStatuses.map((t) => [t.id, t.status]));
+
     for (const id of requestedIds) {
       try {
-        await updateTransferStatus(id, {
-          status:      "IN_TRANSIT",
-          changedById: session.userId,
-          notes:       "Coleta confirmada pelo motorista no app",
-        });
-        await prisma.transfer.update({
-          where: { id },
-          data: {
-            collectPhotoUrl,
-            collectPhotoPath,
-            collectedAt: new Date(),
-          },
-        });
+        const current = statusMap.get(id);
+        if (current === TransferStatus.READY_TO_COLLECT && collectPhotoUrl && collectPhotoPath) {
+          // Caminho novo — service unificado com history + item.collectConfirmed
+          await collectTransfer(
+            id,
+            { photoUrl: collectPhotoUrl, photoPath: collectPhotoPath },
+            session.userId,
+          );
+        } else {
+          // Caminho legado — APPROVED/PREPARED via updateTransferStatus
+          await updateTransferStatus(id, {
+            status:      "IN_TRANSIT",
+            changedById: session.userId,
+            notes:       "Coleta confirmada pelo motorista no app",
+          });
+          await prisma.transfer.update({
+            where: { id },
+            data: {
+              collectPhotoUrl,
+              collectPhotoPath,
+              collectedAt: new Date(),
+            },
+          });
+        }
         collected.push(id);
       } catch (err) {
         const reason = err instanceof Error ? err.message : "Erro ao coletar";

@@ -107,6 +107,31 @@ export async function uploadTransferCollectPhoto(args: {
   return { path, publicUrl: signed.signedUrl };
 }
 
+// Upload da foto de entrega de uma transferência (motorista entrega no destino).
+// path: "transfer_{transferId}/DELIVER_{timestamp}.{ext}" — espelha o pattern de coleta.
+export async function uploadTransferDeliveryPhoto(args: {
+  transferId:  string;
+  buffer:      Buffer;
+  contentType: string;
+  extension:   string;
+}): Promise<UploadResult> {
+  const client = getClient();
+  const path = `transfer_${args.transferId}/DELIVER_${Date.now()}.${args.extension}`;
+
+  const { error: upErr } = await client.storage.from(BUCKET).upload(path, args.buffer, {
+    contentType: args.contentType,
+    upsert:      false,
+  });
+  if (upErr) throw new Error(`Upload Storage falhou: ${upErr.message}`);
+
+  const { data: signed, error: urlErr } = await client.storage
+    .from(BUCKET)
+    .createSignedUrl(path, 60 * 60 * 24 * 30);
+  if (urlErr || !signed) throw new Error(`URL assinada falhou: ${urlErr?.message ?? "sem dados"}`);
+
+  return { path, publicUrl: signed.signedUrl };
+}
+
 // Regera URL assinada pra uma foto já armazenada (usado em telas admin/auditoria)
 export async function getSignedProofUrl(path: string, expirySeconds = 3600): Promise<string> {
   const client = getClient();

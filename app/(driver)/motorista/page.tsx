@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { Truck, MapPin, Clock, CheckCircle2, AlertTriangle, Store, Package } from "lucide-react";
+import { Truck, MapPin, Clock, CheckCircle2, AlertTriangle, Store, Package, ArrowRight } from "lucide-react";
 import IniciarRotaButton from "./_components/iniciar-rota-button";
 
 interface SequenceStop {
@@ -127,8 +127,67 @@ export default async function MotoristaHomePage() {
     : [];
   const transferMap = new Map(pickupTransfers.map((t) => [t.id, t]));
 
+  // Transferências em rota (IN_TRANSIT) atribuídas a este motorista — precisam
+  // ser entregues no destino. Mostradas em uma seção dedicada acima das rotas.
+  const inTransitTransfers = await prisma.transfer.findMany({
+    where: {
+      status: "IN_TRANSIT",
+      dispatch: { is: { driverId: driver.id } },
+    },
+    select: {
+      id:        true,
+      toStore:   { select: { code: true, name: true } },
+      fromStore: { select: { code: true } },
+      items:     { select: { quantity: true, unit: true, productName: true }, take: 1 },
+    },
+    orderBy: { collectedAt: "asc" },
+  });
+
   return (
     <div className="space-y-4">
+      {inTransitTransfers.length > 0 && (
+        <div className="bg-white rounded-xl border border-orange-200 overflow-hidden shadow-sm">
+          <div className="px-4 py-3 bg-orange-50 border-b border-orange-200">
+            <p className="text-base font-bold text-orange-900 flex items-center gap-2">
+              <Truck className="w-4 h-4" />
+              Transferências em rota
+            </p>
+            <p className="text-xs text-orange-700 mt-0.5">
+              {inTransitTransfers.length} {inTransitTransfers.length === 1 ? "entregar" : "entregar"} no destino
+            </p>
+          </div>
+          <ol className="divide-y divide-gray-100">
+            {inTransitTransfers.map((t) => {
+              const item = t.items[0];
+              return (
+                <li key={t.id}>
+                  <Link
+                    href={`/motorista/transferencia/${t.id}/entregar`}
+                    className="flex items-start gap-3 px-4 py-3 active:bg-gray-50"
+                  >
+                    <div className="w-9 h-9 rounded-full bg-orange-500 text-white flex items-center justify-center flex-shrink-0">
+                      <Package className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-gray-900 flex items-center gap-1">
+                        {t.fromStore?.code ?? "?"} <ArrowRight className="w-3 h-3 text-gray-400" /> {t.toStore.code}
+                      </p>
+                      <p className="text-xs text-gray-600 truncate">
+                        {item ? `${item.quantity} ${item.unit} · ${item.productName}` : "?"}
+                      </p>
+                      <p className="text-[11px] text-gray-500 mt-0.5">{t.toStore.name}</p>
+                    </div>
+                    <span className="flex-shrink-0 text-xs font-bold text-white bg-orange-500 px-3 py-1.5 rounded-lg self-center">
+                      Entregar
+                    </span>
+                  </Link>
+                </li>
+              );
+            })}
+          </ol>
+        </div>
+      )}
+
       {routes.map((route) => {
         const sequence = ((route.sequenceJson as unknown as SequenceStop[] | null) ?? [])
           .slice()
